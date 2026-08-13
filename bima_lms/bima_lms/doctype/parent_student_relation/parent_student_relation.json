@@ -1,0 +1,75 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-08-12 09:20:11.874170",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "section_break_nnu8",
+  "parent_user",
+  "student_user",
+  "relationship",
+  "is_primary_guardian"
+ ],
+ "fields": [
+  {
+   "fieldname": "section_break_nnu8",
+   "fieldtype": "Section Break"
+  },
+  {
+   "description": "User akun Orang Tua",
+   "fieldname": "parent_user",
+   "fieldtype": "Link",
+   "label": "Parent User",
+   "options": "User"
+  },
+  {
+   "description": "User akun Siswa",
+   "fieldname": "student_user",
+   "fieldtype": "Link",
+   "label": "Student User",
+   "options": "User"
+  },
+  {
+   "description": "Hubungan keluarga",
+   "fieldname": "relationship",
+   "fieldtype": "Select",
+   "label": "Relationship",
+   "options": "Father,\nMother,\nStudent Guardian"
+  },
+  {
+   "default": "0",
+   "description": "Penanggung jawab utama",
+   "fieldname": "is_primary_guardian",
+   "fieldtype": "Check",
+   "label": "Is Primary Guardian"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-08-12 09:37:02.111257",
+ "modified_by": "Administrator",
+ "module": "Bima Lms",
+ "name": "Parent Student Relation",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
