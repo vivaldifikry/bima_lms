@@ -24,9 +24,9 @@ app_license = "mit"
 # Includes in <head>
 # ------------------
 
-# include js, css files in header of desk.html
-# app_include_css = "/assets/bima_lms/css/bima_lms.css"
-# app_include_js = "/assets/bima_lms/js/bima_lms.js"
+# override_whitelisted_methods = {
+#     "frappe.core.doctype.user.user.login": "bima_lms.auth.custom_login"
+# }
 
 # include js, css files in header of web template
 # web_include_css = "/assets/bima_lms/css/bima_lms.css"
@@ -234,6 +234,15 @@ app_license = "mit"
 # auth_hooks = [
 # 	"bima_lms.auth.validate"
 # ]
+
+# Overriding Methods
+# ------------------------------
+
+# override_whitelisted_methods = {
+#     "frappe.core.doctype.user.user.login": "bima_lms.auth.custom_login",
+#     "login": "bima_lms.auth.custom_login"
+# }
+
 
 # Automatically update python controller files with type annotations for this app.
 # export_python_type_annotations = True
