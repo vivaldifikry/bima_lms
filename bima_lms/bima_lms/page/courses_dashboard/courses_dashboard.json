@@ -1,0 +1,19 @@
+{
+ "content": null,
+ "creation": "2026-08-14 09:59:26.785783",
+ "docstatus": 0,
+ "doctype": "Page",
+ "idx": 0,
+ "modified": "2026-08-15 12:30:58.762075",
+ "modified_by": "Administrator",
+ "module": "Bima Lms",
+ "name": "courses-dashboard",
+ "owner": "Administrator",
+ "page_name": "courses-dashboard",
+ "roles": [],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "system_page": 0,
+ "title": "Courses"
+}

@@ -1,0 +1,26 @@
+{
+ "content": null,
+ "creation": "2026-08-15 12:31:45.744310",
+ "docstatus": 0,
+ "doctype": "Page",
+ "idx": 0,
+ "modified": "2026-08-15 12:33:48.326664",
+ "modified_by": "Administrator",
+ "module": "Bima Lms",
+ "name": "courses",
+ "owner": "Administrator",
+ "page_name": "courses",
+ "roles": [
+  {
+   "role": "LMS Admin"
+  },
+  {
+   "role": "LMS Teacher"
+  }
+ ],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "system_page": 0,
+ "title": "Courses"
+}
