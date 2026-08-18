@@ -70,8 +70,8 @@ frappe.pages['course-detail'].on_page_load = function(wrapper) {
                 <!-- Main Content Layout (Grid 2 Kolom) -->
                 <div id="detail-content" class="hidden grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
                     
-                    <!-- Kolom Kiri: Header & Deskripsi (8 Columns) -->
-                    <div class="lg:col-span-8">
+                    <!-- Kolom Kiri: Header, Deskripsi, & Section (8 Columns) -->
+                    <div class="lg:col-span-8 space-y-6">
                         <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 sm:p-8 space-y-6">
                             
                             <!-- Category & Instructor Row -->
@@ -80,7 +80,7 @@ frappe.pages['course-detail'].on_page_load = function(wrapper) {
                                     <!-- View Mode Badge -->
                                     <span id="view-category" class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700"></span>
                                     
-                                    <!-- Edit Mode Select dengan Styling Tailwind Modern -->
+                                    <!-- Edit Mode Select -->
                                     <div id="edit-category-wrapper" class="hidden space-y-1.5">
                                         <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider">
                                             Kategori <span class="text-red-500">*</span>
@@ -89,7 +89,6 @@ frappe.pages['course-detail'].on_page_load = function(wrapper) {
                                             <select id="edit-category-id" 
                                                     class="w-full appearance-none bg-white border border-gray-300 rounded-lg px-3.5 py-2 pr-10 text-sm font-medium text-gray-800 shadow-sm transition duration-150 ease-in-out hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 cursor-pointer">
                                             </select>
-                                            <!-- Custom Arrow Icon -->
                                             <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-gray-500">
                                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
@@ -149,6 +148,29 @@ frappe.pages['course-detail'].on_page_load = function(wrapper) {
                             </div>
 
                         </div>
+
+                        <!-- Bab / Sections List Container -->
+                        <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 sm:p-8 space-y-4">
+                            <div class="flex items-center justify-between border-b border-gray-100 pb-3">
+                                <h2 class="text-lg font-bold text-gray-900 flex items-center space-x-2">
+                                    <svg class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
+                                    </svg>
+                                    <span>Materi / Bab Pembelajaran</span>
+                                </h2>
+                                <span id="sections-count" class="text-xs font-semibold px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-full">0 Bab</span>
+                            </div>
+
+                            <!-- Loading Sections -->
+                            <div id="sections-loading" class="flex items-center justify-center py-8">
+                                <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600"></div>
+                                <span class="ml-2 text-xs text-gray-500 font-medium">Memuat materi bab...</span>
+                            </div>
+
+                            <!-- Sections List Grid/Accordion -->
+                            <div id="sections-list" class="hidden space-y-3"></div>
+                        </div>
+
                     </div>
 
                     <!-- Kolom Kanan: Video Intro (4 Columns) -->
@@ -214,6 +236,7 @@ frappe.pages['course-detail'].refresh = function(wrapper) {
     }
 
     load_course_detail(course_id);
+    load_course_sections(course_id);
 };
 
 function load_course_detail(course_id) {
@@ -232,6 +255,66 @@ function load_course_detail(course_id) {
                 renderViewMode();
                 $('#detail-content').removeClass('hidden');
                 $('#action-buttons-wrapper').removeClass('hidden');
+            }
+        }
+    });
+}
+
+function load_course_sections(course_id) {
+    $('#sections-loading').removeClass('hidden');
+    $('#sections-list').addClass('hidden');
+
+    frappe.call({
+        method: 'bima_lms.api.course_sections.get_course_sections',
+        args: { course_id: course_id },
+        callback: function(r) {
+            $('#sections-loading').addClass('hidden');
+            const $list = $('#sections-list');
+            $list.empty().removeClass('hidden');
+
+            if (r.message && r.message.length > 0) {
+                const sections = r.message;
+                $('#sections-count').text(`${sections.length} Bab`);
+
+                sections.forEach((sec, idx) => {
+                    const descHtml = escapeHtml(sec.description || '').replace(/\n/g, '<br>');
+                    const item = $(`
+                        <div class="border border-gray-200 rounded-lg overflow-hidden bg-white hover:border-indigo-200 transition-colors">
+                            <div class="section-header p-4 flex items-center justify-between cursor-pointer select-none bg-gray-50/50 hover:bg-gray-50">
+                                <div class="flex items-center space-x-3">
+                                    <span class="flex items-center justify-center w-7 h-7 rounded-full bg-indigo-100 text-indigo-700 text-xs font-bold">
+                                        ${idx + 1}
+                                    </span>
+                                    <h3 class="text-sm font-bold text-gray-800">${escapeHtml(sec.section_title)}</h3>
+                                </div>
+                                <svg class="chevron-icon w-4 h-4 text-gray-400 transform transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                                </svg>
+                            </div>
+                            <div class="section-body hidden p-4 border-t border-gray-100 bg-white text-xs sm:text-sm text-gray-600 leading-relaxed">
+                                ${descHtml || '<em class="text-gray-400">Tidak ada deskripsi pada bab ini.</em>'}
+                            </div>
+                        </div>
+                    `);
+
+                    // Toggle Expand/Collapse Bab
+                    item.find('.section-header').on('click', function() {
+                        const body = item.find('.section-body');
+                        const icon = item.find('.chevron-icon');
+                        
+                        body.toggleClass('hidden');
+                        icon.toggleClass('rotate-180');
+                    });
+
+                    $list.append(item);
+                });
+            } else {
+                $('#sections-count').text('0 Bab');
+                $list.html(`
+                    <div class="p-6 text-center bg-gray-50 rounded-lg border border-dashed border-gray-200 text-gray-500 text-xs">
+                        Belum ada bab/materi yang ditambahkan pada mata pelajaran ini.
+                    </div>
+                `);
             }
         }
     });
@@ -262,16 +345,13 @@ function renderViewMode() {
 }
 
 function toggleEditMode() {
-    // Populate dropdown category dengan membawa category_id saat ini
     loadCategoriesDropdown(currentCourseData.category_id);
 
-    // Populate Input Values
     $('#edit-title').val(currentCourseData.course_title);
     $('#edit-short-desc').val(currentCourseData.short_description);
     $('#edit-full-desc').val(currentCourseData.full_description);
     $('#edit-video-url').val(currentCourseData.embed_video_url);
 
-    // Switch Visibility
     $('#btn-enable-edit').addClass('hidden');
     $('#edit-mode-actions').removeClass('hidden');
 
@@ -328,7 +408,6 @@ function populateSelectOptions($select, categories, selectedId) {
     $select.append('<option value="" disabled class="text-gray-400">-- Pilih Kategori --</option>');
 
     categories.forEach(cat => {
-        // Konversi ke String agar perbandingan match (integer vs string)
         const isSelected = String(cat.category_id) === String(selectedId) ? 'selected' : '';
         $select.append(`
             <option value="${cat.category_id}" ${isSelected} class="py-2 text-gray-800 bg-white">
@@ -345,7 +424,6 @@ function handleSaveCourse() {
     const full_desc = $('#edit-full-desc').val().trim();
     const video_url = $('#edit-video-url').val().trim();
 
-    // Validasi Wajib Isi
     if (!title) {
         frappe.msgprint({
             title: __('Validasi Gagal'),
@@ -364,11 +442,9 @@ function handleSaveCourse() {
         return;
     }
 
-    // Modal Konfirmasi Frappe
     frappe.confirm(
         'Apakah Anda yakin ingin menyimpan perubahan data course ini?',
         function() {
-            // Action saat klik YAKIN
             frappe.call({
                 method: 'bima_lms.api.courses.update_course_detail',
                 args: {
@@ -388,7 +464,6 @@ function handleSaveCourse() {
                             indicator: 'green'
                         });
                         
-                        // Reload data terbaru dari server
                         load_course_detail(currentCourseData.course_id);
                     }
                 }
