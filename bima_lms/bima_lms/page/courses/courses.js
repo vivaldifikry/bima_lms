@@ -5,7 +5,6 @@ frappe.pages['courses'].on_page_load = function(wrapper) {
         single_column: true
     });
 
-    // Inject Tailwind CSS jika belum ada
     if (!document.getElementById('tailwind-cdn')) {
         let script = document.createElement('script');
         script.id = 'tailwind-cdn';
@@ -13,15 +12,14 @@ frappe.pages['courses'].on_page_load = function(wrapper) {
         document.head.appendChild(script);
     }
 
-    // Render Container Utama dengan Top Navigation Bar Minimalis
     $(page.body).html(`
         <div class="min-h-screen bg-gray-50/50 p-4 sm:p-6 lg:p-8">
             <div class="max-w-7xl mx-auto space-y-6">
-                
+
                 <!-- Compact Navigation & Breadcrumb -->
-                <div class="flex items-center space-x-3 bg-white px-4 py-3 w-fit">
+                <div class="flex items-center space-x-3 bg-white px-4 py-3 rounded-lg shadow-sm border border-gray-100 w-fit">
                     <a href="/app/lms-dashboard" 
-                       class="inline-flex items-center justify-center p-1.5 rounded-lg text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors focus:outline-none"
+                       class="inline-flex items-center justify-center p-1.5 rounded-lg text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
                        title="Kembali ke LMS Dashboard">
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
@@ -41,9 +39,8 @@ frappe.pages['courses'].on_page_load = function(wrapper) {
                     <span class="ml-3 text-gray-600 font-medium text-sm">Memuat data mata pelajaran...</span>
                 </div>
 
-                <!-- Dashboard Content (Hidden initially) -->
+                <!-- Dashboard Content -->
                 <div id="courses-content" class="hidden space-y-6">
-                    <!-- Stat Card Header -->
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                         <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex items-center space-x-4">
                             <div class="p-3 bg-indigo-50 rounded-lg text-indigo-600">
@@ -59,12 +56,9 @@ frappe.pages['courses'].on_page_load = function(wrapper) {
                         </div>
                     </div>
 
-                    <!-- Section Title & Grid Cards -->
                     <div>
                         <h2 class="text-lg font-bold text-gray-800 mb-4">Daftar Mata Pelajaran</h2>
-                        <div id="courses-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                            <!-- Cards di-inject via JS -->
-                        </div>
+                        <div id="courses-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div>
                     </div>
                 </div>
 
@@ -72,7 +66,12 @@ frappe.pages['courses'].on_page_load = function(wrapper) {
         </div>
     `);
 
-    // Fetch Data
+    // Fetch pertama saat halaman di-build
+    load_courses_data();
+};
+
+// Hook ini dipanggil SETIAP KALI halaman ditampilkan di viewport (termasuk via Navigasi SPA / Back Button)
+frappe.pages['courses'].on_page_show = function(wrapper) {
     load_courses_data();
 };
 
@@ -100,9 +99,8 @@ function load_courses_data() {
                 }
 
                 data.courses.forEach(course => {
-                    const cardHtml = `
-                        <div class="bg-white rounded-xl border border-gray-100 shadow-sm hover:shadow-md transition-all duration-200 flex flex-col justify-between overflow-hidden cursor-pointer"
-                             onclick="frappe.msgprint('Akan mengarah ke detail course ID: ${course.course_id}')">
+                    const $card = $(`
+                        <div class="course-card bg-white rounded-xl border border-gray-100 shadow-sm hover:shadow-md transition-all duration-200 flex flex-col justify-between overflow-hidden cursor-pointer" data-id="${course.course_id}">
                             <div class="p-6 space-y-3">
                                 <div class="flex items-center justify-between">
                                     <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700">
@@ -128,8 +126,14 @@ function load_courses_data() {
                                 </span>
                             </div>
                         </div>
-                    `;
-                    $grid.append(cardHtml);
+                    `);
+
+                    $card.on('click', function() {
+                        const id = $(this).data('id');
+                        frappe.set_route('course-detail', { id: id });
+                    });
+
+                    $grid.append($card);
                 });
             }
         }
