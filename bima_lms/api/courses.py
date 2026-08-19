@@ -114,6 +114,15 @@ def get_course_detail(course_id=None):
             LEFT JOIN auth.users u ON c.instructor_id = u.user_id
             WHERE c.course_id = %s
         """
+
+        cursor.execute("""
+            SELECT r.id, r.name 
+            FROM lms.course_rombels cr
+            JOIN master.rombels r ON cr.rombels_id = r.id
+            WHERE cr.course_id = %s
+            ORDER BY r.name ASC;
+        """, (course_id,))
+        assigned_rombels = cursor.fetchall()
         
         # Non-admin hanya bisa melihat course milik sendiri
         if not is_admin:
@@ -148,7 +157,8 @@ def get_course_detail(course_id=None):
             "published_on": str(row["published_on"]) if row.get("published_on") else "-",
             "last_modified_on": str(row["last_modified_on"]) if row.get("last_modified_on") else "-",
             "total_enrollments": row.get("total_enrollments") or 0,
-            "total_lessons": row.get("total_lessons") or 0
+            "total_lessons": row.get("total_lessons") or 0,
+            "assigned_rombels": [{"id": r["id"], "name": r["name"]} for r in assigned_rombels]
         }
 
     except Exception as e:
@@ -294,5 +304,95 @@ def update_course_detail(course_id, course_title, category_id, status=None, shor
     except Exception as e:
         conn.rollback()
         frappe.throw(f"Gagal memperbarui course: {str(e)}")
+    finally:
+        conn.close()
+
+# API untuk mengambil daftar rombel yang terkait dengan course_id di PostgreSQL
+@frappe.whitelist()
+def get_course_rombels(course_id):
+    """
+    Mengambil seluruh daftar rombel aktif dari master.rombels 
+    dan menandai mana yang sudah terhubung dengan course_id di lms.course_rombels.
+    """
+    if not course_id:
+        frappe.throw("Parameter course_id diperlukan.")
+
+    conn = get_pg_connection()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # Mengambil semua rombel aktif beserta flag assigned
+            cur.execute("""
+                SELECT 
+                    r.id AS rombel_id,
+                    r.name AS rombel_name,
+                    r.grade_level,
+                    CASE WHEN cr.course_id IS NOT NULL THEN true ELSE false END AS is_assigned
+                FROM master.rombels r
+                LEFT JOIN lms.course_rombels cr 
+                    ON r.id = cr.rombels_id AND cr.course_id = %s
+                WHERE r.is_active = true AND (r.is_deleted = false OR r.is_deleted IS NULL)
+                ORDER BY r.grade_level ASC, r.name ASC;
+            """, (course_id,))
+            
+            rombels = cur.fetchall()
+            return rombels
+    except Exception as e:
+        frappe.logger("bima_lms").error(f"Error get_course_rombels: {str(e)}")
+        frappe.throw(f"Gagal mengambil daftar rombel: {str(e)}")
+    finally:
+        conn.close()
+
+# API untuk menyimpan atau memperbarui daftar rombel yang di-assign ke course_id di PostgreSQL
+@frappe.whitelist()
+def save_course_rombels(course_id, rombel_ids=None):
+    """
+    Menyimpan atau memperbarui daftar rombel yang di-assign ke course.
+    """
+    if not course_id:
+        frappe.throw("Parameter course_id diperlukan.")
+
+    import json
+
+    # Normalisasi rombel_ids agar selalu menjadi Python List
+    parsed_rombel_ids = []
+    if rombel_ids:
+        if isinstance(rombel_ids, str):
+            try:
+                parsed_rombel_ids = json.loads(rombel_ids)
+            except Exception:
+                parsed_rombel_ids = []
+        elif isinstance(rombel_ids, list):
+            parsed_rombel_ids = rombel_ids
+
+    current_user_id = get_current_user_id()
+    conn = get_pg_connection()
+    
+    try:
+        with conn.cursor() as cur:
+            # 1. Hapus alokasi rombel lama untuk course_id ini
+            cur.execute("DELETE FROM lms.course_rombels WHERE course_id = %s;", (course_id,))
+
+            # 2. Insert kembali rombel yang dipilih
+            if parsed_rombel_ids:
+                insert_query = """
+                    INSERT INTO lms.course_rombels (course_id, rombels_id, created_at, created_by)
+                    VALUES (%s, %s, NOW() AT TIME ZONE 'Asia/Jakarta', %s);
+                """
+                # Pastikan bentuk datanya tuple (course_id, rombel_id, created_by)
+                records_to_insert = [
+                    (course_id, r_id, current_user_id) 
+                    for r_id in parsed_rombel_ids if r_id
+                ]
+
+                if records_to_insert:
+                    cur.executemany(insert_query, records_to_insert)
+
+        conn.commit()
+        return {"status": "success", "message": "Penugasan rombel berhasil diperbarui."}
+
+    except Exception as e:
+        conn.rollback()
+        frappe.logger("bima_lms").error(f"Error save_course_rombels: {str(e)}")
+        frappe.throw(f"Gagal menyimpan penugasan rombel: {str(e)}")
     finally:
         conn.close()

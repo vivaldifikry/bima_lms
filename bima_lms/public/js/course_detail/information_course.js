@@ -6,6 +6,23 @@ window.InformationCourseComponent = (function () {
 
         isPublishedState = (data.status || '').toUpperCase() === 'PUBLISHED';
 
+        // Render Rombel List Chips/Badges
+        const assignedRombels = data.assigned_rombels || [];
+        let rombelBadgesHtml = '';
+
+        if (assignedRombels.length > 0) {
+            rombelBadgesHtml = assignedRombels.map(r => `
+                <span class="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-100/60">
+                    <svg class="w-3 h-3 mr-1 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path>
+                    </svg>
+                    ${escapeHtml(r.name)}
+                </span>
+            `).join('');
+        } else {
+            rombelBadgesHtml = `<span class="text-xs text-gray-400 italic">Belum ditugaskan ke rombel manapun.</span>`;
+        }
+
         const html = `
             <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 space-y-4">
                 <h3 class="text-sm font-bold text-gray-800 pb-2 border-b border-gray-100 flex items-center space-x-2">
@@ -29,6 +46,14 @@ window.InformationCourseComponent = (function () {
 
                         <div id="info-toggle-track" class="relative inline-flex items-center h-6 rounded-full w-11 cursor-pointer transition-colors duration-200 ease-in-out p-0.5 bg-gray-300">
                             <span id="info-toggle-thumb" class="inline-block w-5 h-5 rounded-full bg-white shadow-md transform transition-transform duration-200 ease-in-out translate-x-0"></span>
+                        </div>
+                    </div>
+
+                    <!-- Bagian Informasi Ditujukan ke Rombel Mana saja -->
+                    <div class="pt-2 border-t border-gray-100 space-y-2">
+                        <span class="text-gray-500 font-medium block">Ditujukan Untuk Rombel:</span>
+                        <div class="flex flex-wrap gap-1.5">
+                            ${rombelBadgesHtml}
                         </div>
                     </div>
 
@@ -142,6 +167,11 @@ window.InformationCourseComponent = (function () {
                 day: '2-digit', month: 'short', year: 'numeric'
             });
         } catch (e) { return dateString; }
+    }
+
+    function escapeHtml(text) {
+        if (!text) return '';
+        return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
     }
 
     return {

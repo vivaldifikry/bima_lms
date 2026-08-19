@@ -37,6 +37,13 @@ frappe.pages['course-detail'].on_page_load = function(wrapper) {
                     </div>
 
                     <div id="action-buttons-wrapper" class="hidden flex items-center space-x-3">
+                        <button id="btn-assign-rombel" class="inline-flex items-center space-x-2 px-4 py-2.5 bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 text-sm font-medium rounded-lg shadow-sm transition-colors">
+                            <svg class="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path>
+                            </svg>
+                            <span>Assign to Rombel</span>
+                        </button>
+                    
                         <button id="btn-enable-edit" class="inline-flex items-center space-x-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg shadow-sm transition-colors">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
@@ -193,6 +200,7 @@ frappe.pages['course-detail'].on_page_load = function(wrapper) {
     $('#btn-enable-edit').on('click', toggleEditMode);
     $('#btn-cancel-edit').on('click', toggleViewMode);
     $('#btn-save-course').on('click', handleSaveCourse);
+    $('#btn-assign-rombel').on('click', openAssignRombelModal);
 };
 
 // Global State
@@ -327,6 +335,86 @@ function toggleViewMode() {
     if (window.CourseSectionComponent) {
         CourseSectionComponent.setEditMode(false);
     }
+}
+
+// Function untuk membuka modal Assign Rombel
+function openAssignRombelModal() {
+    if (!currentCourseData) return;
+
+    frappe.call({
+        method: 'bima_lms.api.courses.get_course_rombels',
+        args: { course_id: currentCourseData.course_id },
+        callback: function(r) {
+            if (r.message) {
+                renderRombelModalDialog(r.message);
+            }
+        }
+    });
+}
+
+function renderRombelModalDialog(rombels) {
+    // Format options untuk MultiCheck Frappe
+    const rombelOptions = rombels.map(r => ({
+        label: `${r.rombel_name} (Tingkat ${r.grade_level || '-'})`,
+        value: String(r.rombel_id), // Pastikan value berupa String
+        checked: Boolean(r.is_assigned)
+    }));
+
+    const d = new frappe.ui.Dialog({
+        title: __('Assign Course ke Rombel'),
+        fields: [
+            {
+                label: __('Pilih Rombel'),
+                fieldname: 'assigned_rombel_ids',
+                fieldtype: 'MultiCheck',
+                options: rombelOptions,
+                columns: 2
+            }
+        ],
+        primary_action_label: __('Simpan'),
+        primary_action(values) {
+            // Ekstrak key yang bernilai 1 / true dari Object MultiCheck
+            const rawMultiCheckVal = values.assigned_rombel_ids || {};
+            let selectedRombelIds = [];
+
+            if (Array.isArray(rawMultiCheckVal)) {
+                // Jika dari tipe field lain yang mengembalikan Array
+                selectedRombelIds = rawMultiCheckVal;
+            } else if (typeof rawMultiCheckVal === 'object') {
+                // MultiCheck di Frappe mengembalikan object: { "rombel_id_1": 1, "rombel_id_2": 0 }
+                selectedRombelIds = Object.keys(rawMultiCheckVal).filter(
+                    key => Boolean(rawMultiCheckVal[key])
+                );
+            }
+
+            frappe.call({
+                method: 'bima_lms.api.courses.save_course_rombels',
+                args: {
+                    course_id: currentCourseData.course_id,
+                    // Gunakan JSON.stringify agar aman dikirim lewat HTTP/Frappe RPC
+                    rombel_ids: JSON.stringify(selectedRombelIds)
+                },
+                freeze: true,
+                freeze_message: __('Menyimpan penugasan rombel...'),
+                callback: function(res) {
+                    if (res.message && res.message.status === 'success') {
+                        frappe.show_alert({ 
+                            message: __('Penugasan Rombel berhasil diperbarui'), 
+                            indicator: 'green' 
+                        });
+                        d.hide();
+                        
+                        // Reload detail course
+                        if (typeof load_course_detail === 'function') {
+                            load_course_detail(currentCourseData.course_id);
+                        }
+                    }
+                }
+            });
+        }
+    });
+
+    d.show();
 }
 
 function loadCategoriesDropdown(selectedCategoryId) {
