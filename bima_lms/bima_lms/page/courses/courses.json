@@ -3,8 +3,8 @@
  "creation": "2026-08-15 12:31:45.744310",
  "docstatus": 0,
  "doctype": "Page",
- "idx": 0,
- "modified": "2026-08-15 12:33:48.326664",
+ "idx": 3,
+ "modified": "2026-08-19 13:22:10.291193",
  "modified_by": "Administrator",
  "module": "Bima Lms",
  "name": "courses",
@@ -16,6 +16,9 @@
   },
   {
    "role": "LMS Teacher"
+  },
+  {
+   "role": "LMS Parent"
   }
  ],
  "script": null,

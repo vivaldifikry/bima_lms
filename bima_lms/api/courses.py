@@ -167,16 +167,17 @@ def get_course_detail(course_id=None):
 
 # API untuk mengambil daftar mata pelajaran (courses) berdasarkan user yang sedang login di PostgreSQL
 @frappe.whitelist()
-def get_user_courses():
+def get_user_courses(student_id=None):
     current_user_email = frappe.session.user
 
     user_roles = frappe.get_roles(current_user_email)
-    allowed_roles = ["LMS Admin", "LMS Teacher", "System Manager"]
+    allowed_roles = ["LMS Admin", "LMS Teacher", "LMS Parent", "LMS Student", "System Manager"]
     
     if not any(role in user_roles for role in allowed_roles):
         frappe.throw("Anda tidak memiliki akses untuk melihat halaman ini.", frappe.PermissionError)
 
     is_admin = any(role in user_roles for role in ["LMS Admin", "System Manager"])
+    is_parent = "LMS Parent" in user_roles
 
     try:
         conn = get_pg_connection()
@@ -184,13 +185,8 @@ def get_user_courses():
 
         pg_user_id = get_current_user_id(conn=conn)
 
-        if not pg_user_id and not is_admin:
-            cursor.close()
-            conn.close()
-            return {"stats": {"total_courses": 0}, "courses": []}
-
         base_query = """
-            SELECT 
+            SELECT DISTINCT
                 c.course_id,
                 c.course_title,
                 c.short_description,
@@ -204,12 +200,21 @@ def get_user_courses():
         if is_admin:
             query = base_query + " ORDER BY c.course_id DESC;"
             cursor.execute(query)
+        elif is_parent and student_id:
+            # Query course berdasarkan Rombel tempat siswa terdaftar
+            query = base_query + """
+                JOIN lms.course_rombels cr ON c.course_id = cr.course_id
+                JOIN kelaskita.student_rombels sr ON cr.rombels_id = sr.rombel_id
+                WHERE sr.student_id = %s AND c.status = 'PUBLISHED'
+                ORDER BY c.course_id DESC;
+            """
+            cursor.execute(query, (student_id,))
         else:
+            # Pengampu / Guru
             query = base_query + " WHERE c.instructor_id = %s ORDER BY c.course_id DESC;"
             cursor.execute(query, (pg_user_id,))
 
         rows = cursor.fetchall()
-
         cursor.close()
         conn.close()
 

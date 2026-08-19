@@ -1,4 +1,12 @@
 frappe.pages['courses'].on_page_load = function(wrapper) {
+    // CLEANUP: Hapus data jika user Guest
+    if (frappe.session && frappe.session.user === 'Guest') {
+        localStorage.removeItem('active_student_id');
+        localStorage.removeItem('active_student_name');
+        sessionStorage.removeItem('active_student_id');
+        sessionStorage.removeItem('active_student_name');
+    }
+
     var page = frappe.ui.make_app_page({
         parent: wrapper,
         title: '', 
@@ -16,21 +24,26 @@ frappe.pages['courses'].on_page_load = function(wrapper) {
         <div class="min-h-screen bg-gray-50/50 p-4 sm:p-6 lg:p-8">
             <div class="max-w-7xl mx-auto space-y-6">
 
-                <!-- Compact Navigation & Breadcrumb -->
-                <div class="flex items-center space-x-3 bg-white px-4 py-3 rounded-lg shadow-sm border border-gray-100 w-fit">
-                    <a href="/app/lms-dashboard" 
-                       class="inline-flex items-center justify-center p-1.5 rounded-lg text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
-                       title="Kembali ke LMS Dashboard">
-                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
-                        </svg>
-                    </a>
-                    <div class="h-4 w-px bg-gray-200"></div>
-                    <nav class="flex items-center space-x-2 text-sm font-medium">
-                        <a href="/app/lms-dashboard" class="text-gray-500 hover:text-indigo-600 transition-colors">LMS Dashboard</a>
-                        <span class="text-gray-300">/</span>
-                        <span class="text-gray-900 font-bold">Courses</span>
-                    </nav>
+                <!-- Compact Navigation & Breadcrumb + Student Switcher Container -->
+                <div class="flex flex-wrap items-center justify-between gap-4">
+                    <div class="flex items-center space-x-3 bg-white px-4 py-3 rounded-lg shadow-sm border border-gray-100 w-fit">
+                        <a href="/app/lms-dashboard" 
+                           class="inline-flex items-center justify-center p-1.5 rounded-lg text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+                           title="Kembali ke LMS Dashboard">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+                            </svg>
+                        </a>
+                        <div class="h-4 w-px bg-gray-200"></div>
+                        <nav class="flex items-center space-x-2 text-sm font-medium">
+                            <a href="/app/lms-dashboard" class="text-gray-500 hover:text-indigo-600 transition-colors">LMS Dashboard</a>
+                            <span class="text-gray-300">/</span>
+                            <span class="text-gray-900 font-bold">Courses</span>
+                        </nav>
+                    </div>
+
+                    <!-- Container Badge Switcher Akun Anak -->
+                    <div id="student-switcher-container"></div>
                 </div>
 
                 <!-- Loading Indicator -->
@@ -66,18 +79,39 @@ frappe.pages['courses'].on_page_load = function(wrapper) {
         </div>
     `);
 
-    // Fetch pertama saat halaman di-build
-    load_courses_data();
+    // Inisialisasi awal dengan memuat script student_switcher.js terlebih dahulu
+    frappe.require('/assets/bima_lms/js/student_switcher.js', function() {
+        initCoursesPage();
+    });
 };
 
-// Hook ini dipanggil SETIAP KALI halaman ditampilkan di viewport (termasuk via Navigasi SPA / Back Button)
 frappe.pages['courses'].on_page_show = function(wrapper) {
-    load_courses_data();
+    if (window.StudentSwitcher) {
+        initCoursesPage();
+    }
 };
 
-function load_courses_data() {
+function initCoursesPage() {
+    window.StudentSwitcher.init(function(activeStudentId) {
+        // Render Badge Header
+        window.StudentSwitcher.renderWidget('#student-switcher-container', function(newStudentId) {
+            load_courses_data(newStudentId);
+        });
+
+        // Load Course Data berdasarkan activeStudentId
+        load_courses_data(activeStudentId);
+    });
+}
+
+function load_courses_data(studentId) {
+    $('#courses-loading').removeClass('hidden');
+    $('#courses-content').addClass('hidden');
+
     frappe.call({
         method: 'bima_lms.api.courses.get_user_courses',
+        args: {
+            student_id: studentId || (window.StudentSwitcher ? window.StudentSwitcher.getActiveStudentId() : null)
+        },
         callback: function(r) {
             $('#courses-loading').addClass('hidden');
             $('#courses-content').removeClass('hidden');
@@ -92,7 +126,7 @@ function load_courses_data() {
                 if (data.courses.length === 0) {
                     $grid.html(`
                         <div class="col-span-full bg-white rounded-xl p-8 text-center border border-gray-100">
-                            <p class="text-gray-500 font-medium">Belum ada mata pelajaran yang diampu.</p>
+                            <p class="text-gray-500 font-medium">Belum ada mata pelajaran yang tersedia.</p>
                         </div>
                     `);
                     return;

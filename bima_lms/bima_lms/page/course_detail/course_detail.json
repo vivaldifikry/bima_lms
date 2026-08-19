@@ -4,7 +4,7 @@
  "docstatus": 0,
  "doctype": "Page",
  "idx": 0,
- "modified": "2026-08-15 15:58:13.696945",
+ "modified": "2026-08-19 13:22:36.932840",
  "modified_by": "Administrator",
  "module": "Bima Lms",
  "name": "course-detail",
@@ -16,6 +16,9 @@
   },
   {
    "role": "LMS Teacher"
+  },
+  {
+   "role": "LMS Parent"
   }
  ],
  "script": null,
