@@ -167,7 +167,13 @@ def get_course_detail(course_id=None):
 
 # API untuk mengambil daftar mata pelajaran (courses) berdasarkan user yang sedang login di PostgreSQL
 @frappe.whitelist()
-def get_user_courses(student_id=None):
+def get_user_courses(student_id=None, rombel_ids=None, category_ids=None):
+    """
+    Mengambil daftar mata pelajaran berdasarkan user yang sedang login.
+    Jika parent dengan student_id, ambil berdasarkan rombel siswa.
+    Jika rombel_ids diberikan, filter berdasarkan rombel tersebut.
+    Jika category_ids diberikan, filter berdasarkan kategori tersebut.
+    """
     current_user_email = frappe.session.user
 
     user_roles = frappe.get_roles(current_user_email)
@@ -178,6 +184,7 @@ def get_user_courses(student_id=None):
 
     is_admin = any(role in user_roles for role in ["LMS Admin", "System Manager"])
     is_parent = "LMS Parent" in user_roles
+    is_teacher = "LMS Teacher" in user_roles
 
     try:
         conn = get_pg_connection()
@@ -185,35 +192,97 @@ def get_user_courses(student_id=None):
 
         pg_user_id = get_current_user_id(conn=conn)
 
+        # Parse rombel_ids jika berupa string JSON
+        parsed_rombel_ids = []
+        if rombel_ids:
+            import json
+            if isinstance(rombel_ids, str):
+                try:
+                    parsed_rombel_ids = json.loads(rombel_ids)
+                except:
+                    parsed_rombel_ids = []
+            elif isinstance(rombel_ids, list):
+                parsed_rombel_ids = rombel_ids
+
+        # Parse category_ids jika berupa string JSON
+        parsed_category_ids = []
+        if category_ids:
+            import json
+            if isinstance(category_ids, str):
+                try:
+                    parsed_category_ids = json.loads(category_ids)
+                except:
+                    parsed_category_ids = []
+            elif isinstance(category_ids, list):
+                parsed_category_ids = category_ids
+
         base_query = """
             SELECT DISTINCT
                 c.course_id,
                 c.course_title,
                 c.short_description,
                 cat.category_name,
-                u.user_full_name AS instructor_name
+                u.user_full_name AS instructor_name,
+                array_agg(DISTINCT r.id) AS rombel_ids,
+                array_agg(DISTINCT r.name) AS rombel_names,
+                c.category_id
             FROM lms.courses c
             LEFT JOIN master.lms_course_categories cat ON c.category_id = cat.category_id
             LEFT JOIN auth.users u ON c.instructor_id = u.user_id
+            LEFT JOIN lms.course_rombels cr ON c.course_id = cr.course_id
+            LEFT JOIN master.rombels r ON cr.rombels_id = r.id
         """
 
-        if is_admin:
-            query = base_query + " ORDER BY c.course_id DESC;"
-            cursor.execute(query)
-        elif is_parent and student_id:
-            # Query course berdasarkan Rombel tempat siswa terdaftar
-            query = base_query + """
-                JOIN lms.course_rombels cr ON c.course_id = cr.course_id
-                JOIN kelaskita.student_rombels sr ON cr.rombels_id = sr.rombel_id
-                WHERE sr.student_id = %s AND c.status = 'PUBLISHED'
-                ORDER BY c.course_id DESC;
-            """
-            cursor.execute(query, (student_id,))
-        else:
-            # Pengampu / Guru
-            query = base_query + " WHERE c.instructor_id = %s ORDER BY c.course_id DESC;"
-            cursor.execute(query, (pg_user_id,))
+        where_conditions = []
+        params = []
 
+        if is_admin:
+            # Admin: lihat semua course
+            pass
+            
+        elif is_parent and student_id:
+            # Parent: lihat course berdasarkan rombel siswa
+            where_conditions.append("EXISTS (SELECT 1 FROM master.rombel_students rs WHERE rs.rombel_id = cr.rombels_id AND rs.student_id = %s)")
+            params.append(student_id)
+            where_conditions.append("c.status = 'PUBLISHED'")
+            
+            # Filter rombel jika ada
+            if parsed_rombel_ids:
+                placeholders = ','.join(['%s'] * len(parsed_rombel_ids))
+                where_conditions.append(f"cr.rombels_id IN ({placeholders})")
+                params.extend(parsed_rombel_ids)
+            
+        elif is_teacher:
+            # Teacher: lihat course milik sendiri
+            where_conditions.append("c.instructor_id = %s")
+            params.append(pg_user_id)
+            
+        else:
+            # Student: lihat course berdasarkan rombel sendiri
+            where_conditions.append("EXISTS (SELECT 1 FROM master.rombel_students rs WHERE rs.rombel_id = cr.rombels_id AND rs.student_id = %s)")
+            params.append(pg_user_id)
+            where_conditions.append("c.status = 'PUBLISHED'")
+            
+            # Filter rombel jika ada
+            if parsed_rombel_ids:
+                placeholders = ','.join(['%s'] * len(parsed_rombel_ids))
+                where_conditions.append(f"cr.rombels_id IN ({placeholders})")
+                params.extend(parsed_rombel_ids)
+
+        # Filter kategori (untuk semua role)
+        if parsed_category_ids:
+            placeholders = ','.join(['%s'] * len(parsed_category_ids))
+            where_conditions.append(f"c.category_id IN ({placeholders})")
+            params.extend(parsed_category_ids)
+
+        # Gabungkan query
+        if where_conditions:
+            base_query += " WHERE " + " AND ".join(where_conditions)
+        
+        base_query += " GROUP BY c.course_id, c.course_title, c.short_description, cat.category_name, u.user_full_name, c.category_id"
+        base_query += " ORDER BY c.course_id DESC;"
+
+        cursor.execute(base_query, tuple(params))
         rows = cursor.fetchall()
         cursor.close()
         conn.close()
@@ -225,7 +294,10 @@ def get_user_courses(student_id=None):
                 "course_title": row[1] or "Tanpa Judul",
                 "short_description": row[2] or "Tidak ada deskripsi singkat.",
                 "category_name": row[3] or "Umum",
-                "instructor_name": row[4] or "Unassigned"
+                "instructor_name": row[4] or "Unassigned",
+                "rombel_ids": row[5] if row[5] else [],
+                "rombel_names": row[6] if row[6] else [],
+                "category_id": row[7]
             })
 
         return {
@@ -239,6 +311,39 @@ def get_user_courses(student_id=None):
     except Exception as e:
         frappe.logger("bima_lms").error(f"Error get_user_courses: {str(e)}")
         frappe.throw(f"Gagal mengambil data mata pelajaran: {str(e)}")
+
+@frappe.whitelist()
+def get_student_rombels(student_id):
+    """
+    Mengambil daftar rombel yang diikuti oleh seorang siswa
+    """
+    if not student_id:
+        frappe.throw("Parameter student_id diperlukan.", frappe.MandatoryError)
+
+    try:
+        conn = get_pg_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        
+        cursor.execute("""
+            SELECT 
+                r.id AS rombel_id,
+                r.name AS rombel_name,
+                r.grade_level
+            FROM master.rombel_students rs
+            JOIN master.rombels r ON rs.rombel_id = r.id
+            WHERE rs.student_id = %s
+            ORDER BY r.grade_level ASC, r.name ASC;
+        """, (student_id,))
+        
+        rombels = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        return rombels
+        
+    except Exception as e:
+        frappe.logger("bima_lms").error(f"Error get_student_rombels: {str(e)}")
+        frappe.throw(f"Gagal mengambil daftar rombel: {str(e)}")
     
 @frappe.whitelist()
 def get_course_categories():

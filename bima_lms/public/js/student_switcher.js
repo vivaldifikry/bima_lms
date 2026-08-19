@@ -50,6 +50,14 @@ window.StudentSwitcher = {
         return [];
     },
 
+    // Cek apakah user adalah Administrator atau System Manager
+    isAdminOrSystemManager: function() {
+        const roles = this.getUserRoles();
+        return roles.includes('Administrator') || 
+               roles.includes('System Manager') ||
+               roles.includes('Admin');
+    },
+
     bindLogoutListener: function() {
         const self = this;
         if (frappe.logout && !frappe.logout._switcher_patched) {
@@ -146,7 +154,19 @@ window.StudentSwitcher = {
 
         const userRoles = this.getUserRoles();
         const isParent = userRoles.includes('LMS Parent');
+        const isAdmin = this.isAdminOrSystemManager();
 
+        // Jika user adalah Admin atau System Manager, tidak perlu pilih anak
+        if (isAdmin) {
+            // Hapus data student jika ada (karena admin tidak perlu)
+            this.clearActiveStudent();
+            // Sembunyikan widget switcher
+            $('#student-switcher-container').empty();
+            if (typeof onContextReady === 'function') onContextReady(null);
+            return;
+        }
+
+        // Jika bukan Parent, tidak perlu pilih anak
         if (!isParent) {
             if (typeof onContextReady === 'function') onContextReady(null);
             return;
@@ -227,17 +247,19 @@ window.StudentSwitcher = {
                                 indicator: 'green'
                             });
 
-                            setTimeout(() => {
-                                window.location.reload();
-                            }, 300);
+                            if (!window._student_reloading) {
+                                window._student_reloading = true;
+                                setTimeout(() => {
+                                    window._student_reloading = false;
+                                    window.location.reload();
+                                }, 300);
+                            }
                         }
                     });
 
-                    // PERBAIKAN: Kunci Modal Jika Mandatori
                     if (isMandatory) {
-                        dialog.no_cancel(); // Sembunyikan tombol cancel/close standar
+                        dialog.no_cancel();
 
-                        // Matikan penutupan modal saat klik area luar (backdrop)
                         dialog.$wrapper.off('click');
                         dialog.$wrapper.on('click', function(e) {
                             if ($(e.target).hasClass('modal') || $(e.target).hasClass('modal-backdrop')) {
@@ -246,12 +268,10 @@ window.StudentSwitcher = {
                             }
                         });
 
-                        // Sembunyikan tombol 'x' close jika ada
                         dialog.$wrapper.find('.modal-header .close, .modal-header .btn-modal-close').hide();
 
-                        // Matikan penutupan via tombol Esc
                         $(document).off('keydown.modal_mandatory').on('keydown.modal_mandatory', function(e) {
-                            if (e.which === 27) { // 27 = KeyCode ESC
+                            if (e.which === 27) {
                                 e.stopImmediatePropagation();
                                 e.preventDefault();
                             }
@@ -272,11 +292,19 @@ window.StudentSwitcher = {
                         selectedStudentId = String($(this).data('id'));
                     });
                 } else {
+                    // Jika tidak ada data anak, hapus storage dan refresh
+                    self.clearActiveStudent();
                     frappe.msgprint({
                         title: __('Data Tidak Ditemukan'),
                         indicator: 'orange',
                         message: __('Tidak ada data anak yang terhubung dengan akun Orang Tua Anda.')
                     });
+                    // Jika modal mandatory dan tidak ada data, arahkan ke dashboard
+                    if (isMandatory) {
+                        setTimeout(() => {
+                            frappe.set_route('lms-dashboard');
+                        }, 2000);
+                    }
                 }
             }
         });
@@ -285,6 +313,13 @@ window.StudentSwitcher = {
     renderWidget: function(containerSelector, onSwitchSuccess) {
         const self = this;
         const userRoles = self.getUserRoles();
+        const isAdmin = this.isAdminOrSystemManager();
+
+        // Jika Admin atau System Manager, sembunyikan widget
+        if (isAdmin) {
+            $(containerSelector).empty();
+            return;
+        }
 
         if (!userRoles.includes('LMS Parent')) {
             $(containerSelector).empty();
@@ -312,9 +347,14 @@ window.StudentSwitcher = {
         $(containerSelector).html(widgetHtml);
 
         $('#btn-trigger-switch-student').off('click').on('click', function() {
-            // isMandatory = false karena orang tua sudah punya active_student_id dan hanya ingin mengganti
             self.openModal(false, function() {
-                window.location.reload();
+                if (!window._student_reloading) {
+                    window._student_reloading = true;
+                    setTimeout(() => {
+                        window._student_reloading = false;
+                        window.location.reload();
+                    }, 300);
+                }
             });
         });
     },
