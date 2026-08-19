@@ -16,7 +16,7 @@ frappe.pages['course-detail'].on_page_load = function(wrapper) {
         <div class="min-h-screen bg-gray-50/50 p-4 sm:p-6 lg:p-8">
             <div class="max-w-7xl mx-auto space-y-6">
 
-                <!-- Navigation & Edit Action Bar -->
+                <!-- Header / Breadcrumb & Action Buttons -->
                 <div class="flex flex-wrap items-center justify-between gap-4">
                     <div class="flex items-center space-x-3 bg-white px-4 py-3 rounded-lg shadow-sm border border-gray-100 w-fit">
                         <a href="javascript:history.back()" 
@@ -36,9 +36,7 @@ frappe.pages['course-detail'].on_page_load = function(wrapper) {
                         </nav>
                     </div>
 
-                    <!-- Action Buttons -->
                     <div id="action-buttons-wrapper" class="hidden flex items-center space-x-3">
-                        <!-- View Mode Button -->
                         <button id="btn-enable-edit" class="inline-flex items-center space-x-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg shadow-sm transition-colors">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
@@ -46,7 +44,6 @@ frappe.pages['course-detail'].on_page_load = function(wrapper) {
                             <span>Edit Course</span>
                         </button>
 
-                        <!-- Edit Mode Buttons -->
                         <div id="edit-mode-actions" class="hidden flex items-center space-x-2">
                             <button id="btn-cancel-edit" class="px-4 py-2.5 bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 text-sm font-medium rounded-lg transition-colors">
                                 Batal
@@ -67,20 +64,19 @@ frappe.pages['course-detail'].on_page_load = function(wrapper) {
                     <span class="ml-3 text-gray-600 font-medium text-sm">Memuat detail mata pelajaran...</span>
                 </div>
 
-                <!-- Main Content Layout (Grid 2 Kolom) -->
+                <!-- Detail Content Layout -->
                 <div id="detail-content" class="hidden grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
                     
-                    <!-- Kolom Kiri: Header, Deskripsi, & Section (8 Columns) -->
+                    <!-- Left Column -->
                     <div class="lg:col-span-8 space-y-6">
+                        
+                        <!-- Header & Title Card -->
                         <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 sm:p-8 space-y-6">
                             
-                            <!-- Category & Instructor Row -->
                             <div class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 pb-4">
                                 <div>
-                                    <!-- View Mode Badge -->
                                     <span id="view-category" class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700"></span>
                                     
-                                    <!-- Edit Mode Select -->
                                     <div id="edit-category-wrapper" class="hidden space-y-1.5">
                                         <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider">
                                             Kategori <span class="text-red-500">*</span>
@@ -106,15 +102,12 @@ frappe.pages['course-detail'].on_page_load = function(wrapper) {
                                 </div>
                             </div>
 
-                            <!-- Title & Short Description -->
                             <div class="space-y-4">
-                                <!-- View Mode Title & Short Desc -->
                                 <div id="view-title-group" class="space-y-2">
                                     <h1 id="view-title" class="text-2xl sm:text-3xl font-extrabold text-gray-900 leading-tight"></h1>
                                     <p id="view-short-desc" class="text-base text-gray-600 font-normal leading-relaxed"></p>
                                 </div>
 
-                                <!-- Edit Mode Inputs -->
                                 <div id="edit-title-group" class="hidden space-y-4">
                                     <div>
                                         <label class="block text-xs font-semibold text-gray-500 uppercase mb-1">Judul Course <span class="text-red-500">*</span></label>
@@ -127,7 +120,6 @@ frappe.pages['course-detail'].on_page_load = function(wrapper) {
                                 </div>
                             </div>
 
-                            <!-- Full Description Section -->
                             <div class="pt-5 border-t border-gray-100 space-y-3">
                                 <h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center space-x-1.5">
                                     <svg class="w-4 h-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -136,12 +128,10 @@ frappe.pages['course-detail'].on_page_load = function(wrapper) {
                                     <span>Deskripsi Lengkap</span>
                                 </h2>
                                 
-                                <!-- View Mode -->
                                 <div id="view-full-desc-wrapper" class="bg-gray-50/70 rounded-lg p-4 border border-gray-100">
                                     <div id="view-full-desc" class="text-gray-700 text-sm sm:text-base leading-relaxed space-y-2"></div>
                                 </div>
 
-                                <!-- Edit Mode -->
                                 <div id="edit-full-desc-wrapper" class="hidden">
                                     <textarea id="edit-full-desc" rows="6" class="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-800 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500" placeholder="Tuliskan materi atau penjelasan lengkap..."></textarea>
                                 </div>
@@ -149,32 +139,15 @@ frappe.pages['course-detail'].on_page_load = function(wrapper) {
 
                         </div>
 
-                        <!-- Bab / Sections List Container -->
-                        <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 sm:p-8 space-y-4">
-                            <div class="flex items-center justify-between border-b border-gray-100 pb-3">
-                                <h2 class="text-lg font-bold text-gray-900 flex items-center space-x-2">
-                                    <svg class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
-                                    </svg>
-                                    <span>Materi / Bab Pembelajaran</span>
-                                </h2>
-                                <span id="sections-count" class="text-xs font-semibold px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-full">0 Bab</span>
-                            </div>
-
-                            <!-- Loading Sections -->
-                            <div id="sections-loading" class="flex items-center justify-center py-8">
-                                <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600"></div>
-                                <span class="ml-2 text-xs text-gray-500 font-medium">Memuat materi bab...</span>
-                            </div>
-
-                            <!-- Sections List Grid/Accordion -->
-                            <div id="sections-list" class="hidden space-y-3"></div>
-                        </div>
+                        <!-- Container Komponen Course Section -->
+                        <div id="course-section-container"></div>
 
                     </div>
 
-                    <!-- Kolom Kanan: Video Intro (4 Columns) -->
-                    <div class="lg:col-span-4 sticky top-6 space-y-4">
+                    <!-- Right Column -->
+                    <div class="lg:col-span-4 space-y-6 lg:sticky lg:top-6">
+                        
+                        <!-- Video Intro Card -->
                         <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4 space-y-3">
                             <h3 class="text-sm font-bold text-gray-800 flex items-center space-x-2">
                                 <svg class="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -184,7 +157,6 @@ frappe.pages['course-detail'].on_page_load = function(wrapper) {
                                 <span>Video Intro</span>
                             </h3>
 
-                            <!-- View Mode Video Player -->
                             <div id="video-frame-wrapper" class="hidden relative w-full overflow-hidden rounded-lg bg-black aspect-video shadow-inner">
                                 <iframe id="video-frame" class="w-full h-full" src="" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
                             </div>
@@ -198,7 +170,6 @@ frappe.pages['course-detail'].on_page_load = function(wrapper) {
                                 <p class="text-xs font-semibold text-gray-500">Video Intro Tidak Tersedia</p>
                             </div>
 
-                            <!-- Edit Mode Input Video Link -->
                             <div id="edit-video-wrapper" class="hidden pt-2 border-t border-gray-100 space-y-1">
                                 <label class="block text-xs font-semibold text-gray-500">URL Video</label>
                                 <input type="url" id="edit-video-url" class="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-xs text-gray-800 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500" placeholder="https://www.youtube.com/embed/...">
@@ -206,6 +177,10 @@ frappe.pages['course-detail'].on_page_load = function(wrapper) {
                             </div>
 
                         </div>
+
+                        <!-- Container Komponen Information Course -->
+                        <div id="information-course-container"></div>
+
                     </div>
 
                 </div>
@@ -214,7 +189,7 @@ frappe.pages['course-detail'].on_page_load = function(wrapper) {
         </div>
     `);
 
-    // Register Event Listeners
+    // Event Listeners
     $('#btn-enable-edit').on('click', toggleEditMode);
     $('#btn-cancel-edit').on('click', toggleViewMode);
     $('#btn-save-course').on('click', handleSaveCourse);
@@ -235,8 +210,17 @@ frappe.pages['course-detail'].refresh = function(wrapper) {
         return;
     }
 
-    load_course_detail(course_id);
-    load_course_sections(course_id);
+    // Load file komponen eksternal
+    frappe.require([
+        '/assets/bima_lms/js/course_detail/information_course.js',
+        '/assets/bima_lms/js/course_detail/course_section.js'
+    ], function() {
+        load_course_detail(course_id);
+
+        if (window.CourseSectionComponent) {
+            CourseSectionComponent.loadSections('#course-section-container', course_id);
+        }
+    });
 };
 
 function load_course_detail(course_id) {
@@ -253,68 +237,14 @@ function load_course_detail(course_id) {
             if (r.message) {
                 currentCourseData = r.message;
                 renderViewMode();
+
+                // Render komponen Information Course
+                if (window.InformationCourseComponent) {
+                    InformationCourseComponent.render('#information-course-container', currentCourseData);
+                }
+
                 $('#detail-content').removeClass('hidden');
                 $('#action-buttons-wrapper').removeClass('hidden');
-            }
-        }
-    });
-}
-
-function load_course_sections(course_id) {
-    $('#sections-loading').removeClass('hidden');
-    $('#sections-list').addClass('hidden');
-
-    frappe.call({
-        method: 'bima_lms.api.course_sections.get_course_sections',
-        args: { course_id: course_id },
-        callback: function(r) {
-            $('#sections-loading').addClass('hidden');
-            const $list = $('#sections-list');
-            $list.empty().removeClass('hidden');
-
-            if (r.message && r.message.length > 0) {
-                const sections = r.message;
-                $('#sections-count').text(`${sections.length} Bab`);
-
-                sections.forEach((sec, idx) => {
-                    const descHtml = escapeHtml(sec.description || '').replace(/\n/g, '<br>');
-                    const item = $(`
-                        <div class="border border-gray-200 rounded-lg overflow-hidden bg-white hover:border-indigo-200 transition-colors">
-                            <div class="section-header p-4 flex items-center justify-between cursor-pointer select-none bg-gray-50/50 hover:bg-gray-50">
-                                <div class="flex items-center space-x-3">
-                                    <span class="flex items-center justify-center w-7 h-7 rounded-full bg-indigo-100 text-indigo-700 text-xs font-bold">
-                                        ${idx + 1}
-                                    </span>
-                                    <h3 class="text-sm font-bold text-gray-800">${escapeHtml(sec.section_title)}</h3>
-                                </div>
-                                <svg class="chevron-icon w-4 h-4 text-gray-400 transform transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
-                                </svg>
-                            </div>
-                            <div class="section-body hidden p-4 border-t border-gray-100 bg-white text-xs sm:text-sm text-gray-600 leading-relaxed">
-                                ${descHtml || '<em class="text-gray-400">Tidak ada deskripsi pada bab ini.</em>'}
-                            </div>
-                        </div>
-                    `);
-
-                    // Toggle Expand/Collapse Bab
-                    item.find('.section-header').on('click', function() {
-                        const body = item.find('.section-body');
-                        const icon = item.find('.chevron-icon');
-                        
-                        body.toggleClass('hidden');
-                        icon.toggleClass('rotate-180');
-                    });
-
-                    $list.append(item);
-                });
-            } else {
-                $('#sections-count').text('0 Bab');
-                $list.html(`
-                    <div class="p-6 text-center bg-gray-50 rounded-lg border border-dashed border-gray-200 text-gray-500 text-xs">
-                        Belum ada bab/materi yang ditambahkan pada mata pelajaran ini.
-                    </div>
-                `);
             }
         }
     });
@@ -365,6 +295,14 @@ function toggleEditMode() {
     $('#edit-full-desc-wrapper').removeClass('hidden');
 
     $('#edit-video-wrapper').removeClass('hidden');
+
+    // Mengaktifkan Edit Mode pada komponen Information Course & Course Section
+    if (window.InformationCourseComponent) {
+        InformationCourseComponent.setEditMode(true, currentCourseData.status);
+    }
+    if (window.CourseSectionComponent) {
+        CourseSectionComponent.setEditMode(true);
+    }
 }
 
 function toggleViewMode() {
@@ -381,6 +319,14 @@ function toggleViewMode() {
     $('#edit-full-desc-wrapper').addClass('hidden');
 
     $('#edit-video-wrapper').addClass('hidden');
+
+    // Mengembalikan ke View Mode pada komponen Information Course & Course Section
+    if (window.InformationCourseComponent) {
+        InformationCourseComponent.setEditMode(false, currentCourseData.status);
+    }
+    if (window.CourseSectionComponent) {
+        CourseSectionComponent.setEditMode(false);
+    }
 }
 
 function loadCategoriesDropdown(selectedCategoryId) {
@@ -423,49 +369,77 @@ function handleSaveCourse() {
     const short_desc = $('#edit-short-desc').val().trim();
     const full_desc = $('#edit-full-desc').val().trim();
     const video_url = $('#edit-video-url').val().trim();
+    
+    const status = window.InformationCourseComponent 
+        ? InformationCourseComponent.getSelectedStatus() 
+        : currentCourseData.status;
+
+    const sectionsPayload = window.CourseSectionComponent 
+        ? CourseSectionComponent.getSectionsPayload() 
+        : [];
+    const deletedSectionIds = window.CourseSectionComponent 
+        ? CourseSectionComponent.getDeletedSectionIds() 
+        : [];
 
     if (!title) {
-        frappe.msgprint({
-            title: __('Validasi Gagal'),
-            indicator: 'red',
-            message: __('Judul Course tidak boleh kosong.')
-        });
+        frappe.msgprint({ title: __('Validasi Gagal'), indicator: 'red', message: __('Judul Course tidak boleh kosong.') });
         return;
     }
 
     if (!category_id) {
-        frappe.msgprint({
-            title: __('Validasi Gagal'),
-            indicator: 'red',
-            message: __('Kategori Course wajib dipilih.')
-        });
+        frappe.msgprint({ title: __('Validasi Gagal'), indicator: 'red', message: __('Kategori Course wajib dipilih.') });
         return;
     }
 
     frappe.confirm(
-        'Apakah Anda yakin ingin menyimpan perubahan data course ini?',
+        __('Apakah Anda yakin ingin menyimpan perubahan data course dan daftar bab ini?'),
         function() {
+
             frappe.call({
                 method: 'bima_lms.api.courses.update_course_detail',
                 args: {
                     course_id: currentCourseData.course_id,
                     course_title: title,
                     category_id: category_id,
+                    status: status,
                     short_description: short_desc,
                     full_description: full_desc,
                     embed_video_url: video_url
                 },
-                freeze: true,
-                freeze_message: __('Menyimpan perubahan...'),
                 callback: function(r) {
                     if (r.message && r.message.status === 'success') {
-                        frappe.show_alert({
-                            message: __('Course berhasil diperbarui'),
-                            indicator: 'green'
+                        frappe.show_progress(__('Menyimpan Perubahan...'), 70, 100);
+
+                        frappe.call({
+                            method: 'bima_lms.api.course_sections.batch_save_course_sections',
+                            args: {
+                                course_id: currentCourseData.course_id,
+                                sections_data: JSON.stringify(sectionsPayload),
+                                deleted_section_ids: JSON.stringify(deletedSectionIds)
+                            },
+                            callback: function(secRes) {
+                                frappe.hide_progress();
+                                if (secRes.message && secRes.message.status === 'success') {
+                                    frappe.show_alert({ message: __('Course dan bab berhasil diperbarui'), indicator: 'green' });
+                                    
+                                    if (window.CourseSectionComponent && typeof window.CourseSectionComponent.setEditMode === 'function') {
+                                        window.CourseSectionComponent.setEditMode(false);
+                                    }
+
+                                    load_course_detail(currentCourseData.course_id);
+                                }
+                            },
+                            error: function() {
+                                frappe.hide_progress();
+                            }
                         });
-                        
-                        load_course_detail(currentCourseData.course_id);
+                    } else {
+                        frappe.hide_progress();
+                        frappe.msgprint({ title: __('Gagal'), indicator: 'red', message: r.message ? r.message.message : __('Gagal memperbarui course.') });
                     }
+                },
+                error: function() {
+                    frappe.hide_progress();
                 }
             });
         }

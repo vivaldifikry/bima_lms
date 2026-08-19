@@ -28,7 +28,7 @@ def get_current_user_id(conn=None):
 
     should_close_conn = False
     if conn is None:
-        conn = get_pg_connection() # Menggunakan fungsi get_pg_connection / psycopg2.connect(**get_db_config())
+        conn = get_pg_connection()
         should_close_conn = True
 
     try:
@@ -82,25 +82,33 @@ def get_course_detail(course_id=None):
     is_admin = any(role in user_roles for role in ["LMS Admin", "System Manager"])
 
     try:
-        conn = psycopg2.connect(**get_db_config())
-        cursor = conn.cursor()
+        conn = get_pg_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
         # Dapatkan pg_user_id
         cursor.execute("SELECT user_id FROM auth.users WHERE user_email = %s AND is_deleted = false LIMIT 1;", (current_user_email,))
         pg_user = cursor.fetchone()
-        pg_user_id = pg_user[0] if pg_user else None
+        pg_user_id = pg_user["user_id"] if pg_user else None
 
-        # Query detail course
+        # Query detail course lengkap
         query = """
             SELECT 
                 c.course_id,
                 c.course_title,
+                c.category_id,
+                cat.category_name,
                 c.short_description,
                 c.full_description,
                 c.video_link,
-                cat.category_name,
                 u.user_full_name AS instructor_name,
-                c.instructor_id
+                c.instructor_id,
+                c.status,
+                c.created_by,
+                c.created_on,
+                c.published_on,
+                c.last_modified_on,
+                c.total_enrollments,
+                c.total_lessons
             FROM lms.courses c
             LEFT JOIN master.lms_course_categories cat ON c.category_id = cat.category_id
             LEFT JOIN auth.users u ON c.instructor_id = u.user_id
@@ -121,18 +129,26 @@ def get_course_detail(course_id=None):
         if not row:
             frappe.throw("Data mata pelajaran tidak ditemukan atau Anda tidak memiliki akses.", frappe.DoesNotExistError)
 
-        video_raw = row[4] or ""
+        video_raw = row["video_link"] or ""
         embed_video = get_embed_video_url(video_raw)
 
         return {
-            "course_id": row[0],
-            "course_title": row[1] or "Tanpa Judul",
-            "short_description": row[2] or "",
-            "full_description": row[3] or "Belum ada deskripsi lengkap.",
+            "course_id": row["course_id"],
+            "course_title": row["course_title"] or "Tanpa Judul",
+            "category_id": row["category_id"],
+            "category_name": row["category_name"] or "Umum",
+            "short_description": row["short_description"] or "",
+            "full_description": row["full_description"] or "Belum ada deskripsi lengkap.",
             "video_link": video_raw,
             "embed_video_url": embed_video,
-            "category_name": row[5] or "Umum",
-            "instructor_name": row[6] or "Unassigned"
+            "instructor_name": row["instructor_name"] or "Unassigned",
+            "status": row.get("status") or "Draft",
+            "created_by": row.get("created_by") or "-",
+            "created_on": str(row["created_on"]) if row.get("created_on") else "-",
+            "published_on": str(row["published_on"]) if row.get("published_on") else "-",
+            "last_modified_on": str(row["last_modified_on"]) if row.get("last_modified_on") else "-",
+            "total_enrollments": row.get("total_enrollments") or 0,
+            "total_lessons": row.get("total_lessons") or 0
         }
 
     except Exception as e:
@@ -142,13 +158,8 @@ def get_course_detail(course_id=None):
 # API untuk mengambil daftar mata pelajaran (courses) berdasarkan user yang sedang login di PostgreSQL
 @frappe.whitelist()
 def get_user_courses():
-    """
-    Mengambil statistik dan daftar mata pelajaran (courses) dari PostgreSQL
-    berdasarkan user yang sedang login.
-    """
     current_user_email = frappe.session.user
 
-    # 1. Validasi Role Access
     user_roles = frappe.get_roles(current_user_email)
     allowed_roles = ["LMS Admin", "LMS Teacher", "System Manager"]
     
@@ -161,7 +172,6 @@ def get_user_courses():
         conn = get_pg_connection()
         cursor = conn.cursor()
 
-        # 2. Dapatkan user_id PostgreSQL menggunakan helper function
         pg_user_id = get_current_user_id(conn=conn)
 
         if not pg_user_id and not is_admin:
@@ -169,7 +179,6 @@ def get_user_courses():
             conn.close()
             return {"stats": {"total_courses": 0}, "courses": []}
 
-        # 3. Query Data Courses + Categories + Instructors
         base_query = """
             SELECT 
                 c.course_id,
@@ -183,11 +192,9 @@ def get_user_courses():
         """
 
         if is_admin:
-            # Admin melihat semua course
             query = base_query + " ORDER BY c.course_id DESC;"
             cursor.execute(query)
         else:
-            # Guru hanya melihat course yang diampunya
             query = base_query + " WHERE c.instructor_id = %s ORDER BY c.course_id DESC;"
             cursor.execute(query, (pg_user_id,))
 
@@ -196,7 +203,6 @@ def get_user_courses():
         cursor.close()
         conn.close()
 
-        # 4. Format Output Data
         courses = []
         for row in rows:
             courses.append({
@@ -219,7 +225,6 @@ def get_user_courses():
         frappe.logger("bima_lms").error(f"Error get_user_courses: {str(e)}")
         frappe.throw(f"Gagal mengambil data mata pelajaran: {str(e)}")
     
-# API untuk mengambil daftar kategori course di dropdown edit course
 @frappe.whitelist()
 def get_course_categories():
     """Mengambil daftar kategori dari PostgreSQL (schema master)"""
@@ -236,16 +241,20 @@ def get_course_categories():
     finally:
         conn.close()
 
-# API untuk menyimpan pembaruan data course di halaman edit course
 @frappe.whitelist()
-def update_course_detail(course_id, course_title, category_id, short_description=None, full_description=None, embed_video_url=None):
-    """Update data course ke PostgreSQL menggunakan nama kolom last_modified_on & last_modified_by"""
+def update_course_detail(course_id, course_title, category_id, status=None, short_description=None, full_description=None, embed_video_url=None):
+    """Update data course ke PostgreSQL"""
     if not course_id:
         frappe.throw("Course ID tidak ditemukan.")
     if not course_title or not course_title.strip():
         frappe.throw("Judul Course tidak boleh kosong.")
     if not category_id:
         frappe.throw("Kategori wajib dipilih.")
+
+    # Validasi status
+    status_value = (status or "DRAFT").upper()
+    if status_value not in ["PUBLISHED", "DRAFT"]:
+        status_value = "DRAFT"
 
     current_user_id = get_current_user_id()
 
@@ -257,18 +266,25 @@ def update_course_detail(course_id, course_title, category_id, short_description
                 SET 
                     course_title = %s,
                     category_id = %s,
+                    status = %s,
                     short_description = %s,
                     full_description = %s,
                     video_link = %s,
-                    last_modified_on = NOW(),
+                    published_on = CASE 
+                        WHEN %s = 'PUBLISHED' AND published_on IS NULL THEN NOW() 
+                        ELSE published_on 
+                    END,
+                    last_modified_on = NOW() AT TIME ZONE 'Asia/Jakarta',
                     last_modified_by = %s
                 WHERE course_id = %s
             """, (
                 course_title.strip(), 
                 category_id, 
+                status_value,
                 short_description, 
                 full_description, 
                 embed_video_url, 
+                status_value,
                 current_user_id, 
                 course_id
             ))

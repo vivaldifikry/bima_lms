@@ -5,6 +5,7 @@ app_description = "Bima LMS"
 app_email = "vivaldifikry2@gmail.com"
 app_license = "mit"
 
+
 # Apps
 # ------------------
 
