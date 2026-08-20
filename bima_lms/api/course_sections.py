@@ -107,9 +107,9 @@ def batch_save_course_sections(course_id, sections_data, deleted_section_ids=Non
                 if sec_id and str(sec_id).startswith("temp_"):
                     cur.execute("""
                         INSERT INTO lms.course_sections (
-                            course_id, section_title, description, display_order, created_by, is_deleted
-                        ) VALUES (%s, %s, %s, %s, %s, false)
-                    """, (course_id, title, desc, index, current_user_id))
+                            course_id, section_title, description, display_order, is_deleted
+                        ) VALUES (%s, %s, %s, %s, false)
+                    """, (course_id, title, desc, index))
                 else:
                     # Update data yang sudah ada (tanpa trailing comma)
                     cur.execute("""
