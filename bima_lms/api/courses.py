@@ -452,18 +452,20 @@ def get_course_rombels(course_id):
     finally:
         conn.close()
 
-# API untuk menyimpan atau memperbarui daftar rombel yang di-assign ke course_id di PostgreSQL
+@frappe.whitelist()
 @frappe.whitelist()
 def save_course_rombels(course_id, rombel_ids=None):
     """
     Menyimpan atau memperbarui daftar rombel yang di-assign ke course.
+    Juga melakukan enrollment siswa ke course berdasarkan rombel yang dipilih.
     """
     if not course_id:
-        frappe.throw("Parameter course_id diperlukan.")
+        frappe.throw("Parameter course_id diperlukan.", frappe.MandatoryError)
 
     import json
+    from datetime import datetime
 
-    # Normalisasi rombel_ids agar selalu menjadi Python List
+    # Normalisasi rombel_ids
     parsed_rombel_ids = []
     if rombel_ids:
         if isinstance(rombel_ids, str):
@@ -476,19 +478,19 @@ def save_course_rombels(course_id, rombel_ids=None):
 
     current_user_id = get_current_user_id()
     conn = get_pg_connection()
+    new_enrollments_count = 0
     
     try:
         with conn.cursor() as cur:
-            # 1. Hapus alokasi rombel lama untuk course_id ini
+            # 1. Hapus alokasi rombel lama
             cur.execute("DELETE FROM lms.course_rombels WHERE course_id = %s;", (course_id,))
 
-            # 2. Insert kembali rombel yang dipilih
+            # 2. Insert rombel yang dipilih
             if parsed_rombel_ids:
                 insert_query = """
                     INSERT INTO lms.course_rombels (course_id, rombels_id, created_at, created_by)
                     VALUES (%s, %s, NOW() AT TIME ZONE 'Asia/Jakarta', %s);
                 """
-                # Pastikan bentuk datanya tuple (course_id, rombel_id, created_by)
                 records_to_insert = [
                     (course_id, r_id, current_user_id) 
                     for r_id in parsed_rombel_ids if r_id
@@ -497,8 +499,76 @@ def save_course_rombels(course_id, rombel_ids=None):
                 if records_to_insert:
                     cur.executemany(insert_query, records_to_insert)
 
+                # 3. Dapatkan semua student_id dari master.rombel_students
+                placeholders = ','.join(['%s'] * len(parsed_rombel_ids))
+                cur.execute(f"""
+                    SELECT DISTINCT rs.student_id 
+                    FROM master.rombel_students rs
+                    WHERE rs.rombel_id IN ({placeholders}) 
+                    AND (rs.is_deleted = false OR rs.is_deleted IS NULL);
+                """, parsed_rombel_ids)
+                student_ids = [row[0] for row in cur.fetchall()]
+
+                if student_ids:
+                    # 4. Dapatkan daftar student yang sudah terdaftar di course ini
+                    student_placeholders = ','.join(['%s'] * len(student_ids))
+                    cur.execute(f"""
+                        SELECT student_id 
+                        FROM lms.course_enrollments 
+                        WHERE course_id = %s 
+                        AND student_id IN ({student_placeholders});
+                    """, [course_id] + student_ids)
+                    existing_student_ids = [row[0] for row in cur.fetchall()]
+
+                    # 5. Filter student yang belum terdaftar
+                    new_student_ids = [s_id for s_id in student_ids if s_id not in existing_student_ids]
+
+                    # 6. Insert enrollment untuk student yang belum terdaftar
+                    if new_student_ids:
+                        new_enrollments_count = len(new_student_ids)
+                        enrollment_records = [
+                            (
+                                course_id,
+                                s_id,
+                                datetime.now(),
+                                'ENROLLED',
+                                0,
+                                None,  # completed_at
+                                None   # last_accessed_at
+                            )
+                            for s_id in new_student_ids
+                        ]
+
+                        cur.executemany("""
+                            INSERT INTO lms.course_enrollments 
+                            (course_id, student_id, enrollment_date, status, completion_percentage, completed_at, last_accessed_at)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s);
+                        """, enrollment_records)
+
+                        # 7. Update total_enrollments di lms.courses
+                        cur.execute("""
+                            UPDATE lms.courses 
+                            SET total_enrollments = (
+                                SELECT COUNT(*) 
+                                FROM lms.course_enrollments 
+                                WHERE course_id = %s
+                            )
+                            WHERE course_id = %s;
+                        """, (course_id, course_id))
+
         conn.commit()
-        return {"status": "success", "message": "Penugasan rombel berhasil diperbarui."}
+        
+        message = "Penugasan rombel berhasil diperbarui."
+        if new_enrollments_count > 0:
+            message += f" {new_enrollments_count} siswa berhasil didaftarkan ke course."
+        else:
+            message += " Tidak ada siswa baru yang didaftarkan (semua sudah terdaftar)."
+        
+        return {
+            "status": "success", 
+            "message": message,
+            "enrolled_students": new_enrollments_count
+        }
 
     except Exception as e:
         conn.rollback()
