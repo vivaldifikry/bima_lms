@@ -74,6 +74,15 @@ window.CourseSectionComponent = (function() {
             updateSectionNumbers();
             bindEvents();
         }
+
+        // Bind click event untuk section (view mode)
+        $container.find('.section-clickable').off('click').on('click', function() {
+            const sectionId = $(this).data('section-id');
+            if (sectionId) {
+                // Gunakan route_options dengan id
+                frappe.set_route('section-detail', { id: sectionId });
+            }
+        });
     }
 
     function renderSectionItem(sec, index) {
@@ -109,14 +118,22 @@ window.CourseSectionComponent = (function() {
         }
 
         return `
-            <div class="border border-gray-100 rounded-lg p-4 bg-white space-y-2">
+            <div class="border border-gray-100 rounded-lg p-4 bg-white space-y-2 cursor-pointer hover:shadow-md transition-shadow section-clickable" 
+                data-section-id="${sec.section_id}" data-course-id="${sec.course_id}">
                 <div class="flex items-start space-x-3">
                     <span class="flex items-center justify-center w-6 h-6 rounded-full bg-indigo-50 text-indigo-700 text-xs font-bold flex-shrink-0 mt-0.5">
                         ${index + 1}
                     </span>
-                    <div class="space-y-1">
-                        <h3 class="text-sm font-bold text-gray-900 leading-snug">${escapeHtml(sec.section_title)}</h3>
+                    <div class="space-y-1 flex-1">
+                        <h3 class="text-sm font-bold text-gray-900 leading-snug hover:text-indigo-600 transition-colors">
+                            ${escapeHtml(sec.section_title)}
+                        </h3>
                         ${sec.description ? `<p class="text-xs text-gray-600 leading-relaxed">${escapeHtml(sec.description)}</p>` : '<p class="text-xs text-gray-400 italic">Tidak ada deskripsi bab.</p>'}
+                    </div>
+                    <div class="flex items-center space-x-1 text-gray-400">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                        </svg>
                     </div>
                 </div>
             </div>

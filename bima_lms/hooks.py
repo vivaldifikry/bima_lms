@@ -25,6 +25,7 @@ app_license = "mit"
 # Includes in <head>
 # ------------------
 
+
 # override_whitelisted_methods = {
 #     "frappe.core.doctype.user.user.login": "bima_lms.auth.custom_login"
 # }
