@@ -1,5 +1,6 @@
 import frappe
 import psycopg2
+import json
 import re
 import psycopg2.extras
 from bima_lms.api.courses import get_pg_connection
@@ -71,7 +72,7 @@ def get_section_detail(section_id):
             "section_id": section["section_id"],
             "course_id": section["course_id"],
             "course_title": section["course_title"],
-            "section_title": section["section_title"],
+            "section_title": section["section_title"] or "",
             "description": section["description"] or "",
             "display_order": section["display_order"],
             "lessons": []
@@ -82,7 +83,7 @@ def get_section_detail(section_id):
                 "lesson_id": lesson["lesson_id"],
                 "section_id": lesson["section_id"],
                 "lesson_title": lesson["lesson_title"] or "Tanpa Judul",
-                "lesson_type": lesson["lesson_type"] or "ARTICLE",
+                "lesson_type": normalize_lesson_types(lesson["lesson_type"]),
                 "article_content": lesson["article_content"] or "",
                 "pdf_attachment_url": lesson["pdf_attachment_url"] or "",
                 "video_provider": lesson["video_provider"],
@@ -118,3 +119,103 @@ def get_embed_video_url(url):
         return f"https://player.vimeo.com/video/{vimeo_match.group(1)}"
     
     return url
+
+
+def normalize_lesson_types(value):
+    """Return lesson types as a normalized comma-separated string."""
+    allowed_types = {"ARTICLE", "PDF", "VIDEO"}
+    raw_types = value if isinstance(value, (list, tuple)) else str(value or "ARTICLE").split(",")
+    types = []
+    for raw_type in raw_types:
+        lesson_type = str(raw_type).strip().upper()
+        if lesson_type in allowed_types and lesson_type not in types:
+            types.append(lesson_type)
+    return ", ".join(types or ["ARTICLE"])
+
+
+@frappe.whitelist()
+def batch_save_lessons(section_id, section_title=None, description=None, lessons=None, deleted_lesson_ids=None):
+    """
+    Menyimpan detail section dan daftar lesson secara batch via PostgreSQL.
+    """
+    if not section_id:
+        frappe.throw("Parameter section_id diperlukan.")
+
+    if isinstance(lessons, str):
+        lessons = json.loads(lessons)
+    if isinstance(deleted_lesson_ids, str):
+        deleted_lesson_ids = json.loads(deleted_lesson_ids)
+    deleted_lesson_ids = deleted_lesson_ids or []
+
+    try:
+        conn = get_pg_connection()
+        cursor = conn.cursor()
+
+        # 1. Update Detail Bab (Judul & Deskripsi)
+        if section_title is not None:
+            cursor.execute("""
+                UPDATE lms.course_sections
+                SET 
+                    section_title = %s,
+                    description = %s
+                WHERE section_id = %s
+            """, (section_title, description or "", section_id))
+
+        # 2. Soft-delete lessons removed in the editor.
+        if deleted_lesson_ids:
+            cursor.execute("""
+                UPDATE lms.course_lessons
+                SET is_deleted = true
+                WHERE section_id = %s AND lesson_id = ANY(%s)
+            """, (section_id, [int(lesson_id) for lesson_id in deleted_lesson_ids]))
+
+        # 3. Update every remaining lesson and preserve the editor order.
+        if lessons:
+            for display_order, lesson in enumerate(lessons, start=1):
+                lesson_id = lesson.get("lesson_id")
+                lesson_title = lesson.get("lesson_title")
+                lesson_type = normalize_lesson_types(lesson.get("lesson_type"))
+                article_content = lesson.get("article_content", "")
+                pdf_attachment_url = lesson.get("pdf_attachment_url", "")
+                video_url = lesson.get("video_url", "")
+
+                cursor.execute("""
+                    UPDATE lms.course_lessons
+                    SET 
+                        lesson_title = %s,
+                        lesson_type = %s,
+                        article_content = %s,
+                        pdf_attachment_url = %s,
+                        video_url = %s,
+                        display_order = %s
+                    WHERE lesson_id = %s AND section_id = %s AND is_deleted = false
+                """, (
+                    lesson_title,
+                    lesson_type,
+                    article_content,
+                    pdf_attachment_url,
+                    video_url,
+                    display_order,
+                    lesson_id,
+                    section_id
+                ))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return {"status": "success", "message": "Berhasil memperbarui data bab dan materi."}
+
+    except Exception as e:
+        frappe.logger("bima_lms").error(f"Error batch_save_lessons: {str(e)}")
+        frappe.throw(f"Gagal menyimpan materi: {str(e)}")
+
+
+@frappe.whitelist()
+def get_lesson_types():
+    """Mengambil daftar tipe lesson yang tersedia"""
+    return [
+        {"value": "ARTICLE", "label": "Artikel"},
+        {"value": "PDF", "label": "PDF"},
+        {"value": "VIDEO", "label": "Video"}
+    ]
