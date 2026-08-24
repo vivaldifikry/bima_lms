@@ -380,6 +380,47 @@ function bindGlobalEvents() {
         frappe.show_alert({ message: __('Jawaban berhasil dikirim'), indicator: 'green' });
         $input.val('');
     });
+
+    $(document).off('click', '.btn-upload-assignment').on('click', '.btn-upload-assignment', function() {
+        const assignmentId = $(this).data('assignment-id');
+        const studentId = window.StudentSwitcher ? window.StudentSwitcher.getActiveStudentId() : null;
+        if (!studentId) {
+            frappe.msgprint(__('Silakan pilih akun anak terlebih dahulu.'));
+            return;
+        }
+
+        new frappe.ui.FileUploader({
+            restrictions: { allowed_file_types: ['.pdf'] },
+            on_success: function(file) {
+                frappe.call({
+                    method: 'bima_lms.api.section_details.rename_uploaded_file',
+                    args: { file_path: file.file_url },
+                    callback: function(renameResponse) {
+                        if (!renameResponse.message || !renameResponse.message.file_url) return;
+                        frappe.call({
+                            method: 'bima_lms.api.section_details.submit_assignment',
+                            args: {
+                                assignment_id: assignmentId,
+                                student_id: studentId,
+                                file_path: renameResponse.message.file_url
+                            },
+                            freeze: true,
+                            freeze_message: __('Mengumpulkan jawaban...'),
+                            callback: function(response) {
+                                if (response.message && response.message.status === 'success') {
+                                    frappe.show_alert({ message: __('Jawaban berhasil dikumpulkan'), indicator: 'green' });
+                                    loadSectionDetail(currentSectionId);
+                                } else if (response.message && response.message.status === 'already_submitted') {
+                                    frappe.msgprint(__('Tugas ini sudah dikumpulkan sebelumnya.'));
+                                    loadSectionDetail(currentSectionId);
+                                }
+                            }
+                        });
+                    }
+                });
+            }
+        });
+    });
 }
 
 function swapArrayElements(arr, i, j) {
@@ -431,9 +472,12 @@ function loadSectionDetail(section_id) {
     $('#section-content').addClass('hidden');
     $('#section-action-buttons-wrapper').addClass('hidden');
 
-    frappe.call({
-        method: 'bima_lms.api.section_details.get_section_detail',
-        args: { section_id: section_id },
+        frappe.call({
+            method: 'bima_lms.api.section_details.get_section_detail',
+            args: {
+                section_id: section_id,
+                active_student_id: window.StudentSwitcher ? window.StudentSwitcher.getActiveStudentId() : null
+            },
         callback: function(r) {
             console.log('[LMS Debug] API Response received', r.message);
             $('#section-loading').addClass('hidden');
@@ -472,7 +516,7 @@ function renderPage() {
         $('#input-section-title').val(data.section_title);
         $('#input-section-desc').val(data.description);
     } else {
-        $('#btn-section-enable-edit').removeClass('hidden');
+        $('#btn-section-enable-edit').toggleClass('hidden', Boolean(data.is_parent));
         $('#section-edit-mode-actions').addClass('hidden');
         $('#btn-add-lesson, #btn-add-assignment').addClass('hidden');
 
@@ -589,15 +633,7 @@ function renderAssignmentsList() {
                                     </div>
                                 ` : ''}
                                 
-                                <form class="form-submit-assignment border-t border-gray-100 pt-4 space-y-3">
-                                    <label class="block text-xs font-bold text-gray-700 uppercase tracking-wider">Jawaban / Link Tugas Anda</label>
-                                    <div class="flex gap-2">
-                                        <input type="text" class="input-assignment-response flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white" placeholder="Masukkan teks jawaban atau link Google Drive/Github...">
-                                        <button type="submit" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-colors flex-shrink-0">
-                                            Kirim Tugas
-                                        </button>
-                                    </div>
-                                </form>
+                                ${renderAssignmentSubmissionControl(assignment)}
                             </div>
                         </div>
                     </div>
@@ -762,6 +798,7 @@ function getLessonTypes(value) {
 }
 
 function toggleEditMode(enableEdit) {
+        if (enableEdit && currentSectionData && currentSectionData.is_parent) return;
     isEditMode = enableEdit;
     if (!enableEdit) {
         loadSectionDetail(currentSectionId);
@@ -830,4 +867,39 @@ function formatDatetimeInput(dateStr) {
     const d = new Date(dateStr);
     if (isNaN(d.getTime())) return dateStr;
     return d.toISOString().slice(0, 16);
+}
+
+function renderAssignmentSubmissionControl(assignment) {
+    if (!currentSectionData.is_parent) return '';
+
+    if (assignment.submitted_at) {
+        const submittedFileUrl = assignment.submission_file_path ? escapeHtml(assignment.submission_file_path) : '';
+        return `<div class="border-t border-gray-100 pt-4 flex flex-wrap items-center justify-between gap-3">
+            <span class="text-sm font-semibold text-emerald-700">Anda sudah mengumpulkan tugas pada ${formatSubmissionDate(assignment.submitted_at)}</span>
+            ${submittedFileUrl ? `<a href="${submittedFileUrl}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 text-sm font-semibold text-indigo-600 hover:text-indigo-800 hover:underline">
+                <span>Lihat tugas Anda</span>
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4m-4-8h6m0 0v6m0-6L10 14"></path></svg>
+            </a>` : ''}
+        </div>`;
+    }
+
+    return `<div class="border-t border-gray-100 pt-4 space-y-2">
+        <button type="button" class="btn-upload-assignment inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-colors" data-assignment-id="${assignment.assignment_id}">
+            <span>Upload File Jawaban</span>
+        </button>
+    </div>`;
+}
+
+function formatSubmissionDate(dateStr) {
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) return dateStr;
+    const parts = new Intl.DateTimeFormat('id-ID', {
+        timeZone: 'Asia/Jakarta',
+        day: '2-digit', month: 'long', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+    }).formatToParts(date).reduce((values, part) => {
+        values[part.type] = part.value;
+        return values;
+    }, {});
+    return `${parts.day} ${parts.month} ${parts.year} pukul ${parts.hour}:${parts.minute}:${parts.second}`;
 }

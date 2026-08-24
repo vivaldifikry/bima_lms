@@ -2,6 +2,7 @@ import frappe
 import psycopg2
 import psycopg2.extras
 from bima_lms.auth import get_db_config
+from bima_lms.api.courses import update_course_total_lessons
 
 def get_pg_connection():
     """Membuka koneksi ke database PostgreSQL berdasarkan konfigurasi Frappe."""
@@ -120,6 +121,8 @@ def batch_save_course_sections(course_id, sections_data, deleted_section_ids=Non
                         WHERE section_id = %s AND course_id = %s
                     """, (title, desc, index, sec_id, course_id))
 
+            update_course_total_lessons(cur, course_id)
+
         conn.commit()
         return {"status": "success", "message": "Daftar bab berhasil diperbarui."}
     except Exception as e:
@@ -138,11 +141,15 @@ def delete_course_section(section_id):
     conn = get_pg_connection()
     try:
         with conn.cursor() as cur:
+            cur.execute("SELECT course_id FROM lms.course_sections WHERE section_id = %s", (section_id,))
+            section = cur.fetchone()
             cur.execute("""
                 UPDATE lms.course_sections
                 SET is_deleted = true
                 WHERE section_id = %s
             """, (section_id,))
+            if section:
+                update_course_total_lessons(cur, section[0])
         conn.commit()
         return {"status": "success", "message": "Bab berhasil dihapus."}
     except Exception as e:

@@ -2,11 +2,26 @@ import frappe
 import psycopg2
 import json
 import re
+import os
+import shutil
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import psycopg2.extras
-from bima_lms.api.courses import get_pg_connection, get_current_user_id
+from bima_lms.api.courses import get_pg_connection, get_current_user_id, update_course_total_lessons
+
+WIB = ZoneInfo("Asia/Jakarta")
+
+
+def as_wib_iso(value):
+    """Serialize naive database timestamps as explicit WIB timestamps."""
+    if not value:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=WIB)
+    return value.astimezone(WIB).isoformat()
 
 @frappe.whitelist()
-def get_section_detail(section_id):
+def get_section_detail(section_id, active_student_id=None):
     """
     Mengambil detail section beserta materi (lessons) dan tugas (assignments)
     """
@@ -16,6 +31,23 @@ def get_section_detail(section_id):
     try:
         conn = get_pg_connection()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        user_roles = frappe.get_roles(frappe.session.user)
+        active_student_id = active_student_id or None
+        is_builtin_admin = frappe.session.user == "Administrator"
+        is_parent = not is_builtin_admin and "LMS Parent" in user_roles
+
+        if is_parent:
+            if not active_student_id:
+                frappe.throw("Silakan pilih akun anak terlebih dahulu.", frappe.PermissionError)
+            cursor.execute("""
+                SELECT 1
+                FROM auth.parent_student_relations psr
+                JOIN auth.users pu ON pu.user_id = psr.parent_user_id
+                WHERE pu.user_email = %s AND psr.student_user_id = %s
+                LIMIT 1
+            """, (frappe.session.user, active_student_id))
+            if not cursor.fetchone():
+                frappe.throw("Akun anak tidak valid untuk pengguna ini.", frappe.PermissionError)
 
         # 1. Get section detail
         cursor.execute("""
@@ -30,7 +62,13 @@ def get_section_detail(section_id):
             LEFT JOIN lms.courses c ON s.course_id = c.course_id
             WHERE s.section_id = %s 
             AND s.is_deleted = false
-        """, (section_id,))
+            AND (%s = false OR EXISTS (
+                SELECT 1
+                FROM lms.course_rombels cr_parent
+                JOIN master.rombel_students rs_parent ON rs_parent.rombel_id = cr_parent.rombels_id
+                WHERE cr_parent.course_id = s.course_id AND rs_parent.student_id = %s
+            ))
+        """, (section_id, is_parent, active_student_id))
         
         section = cursor.fetchone()
         
@@ -84,6 +122,21 @@ def get_section_detail(section_id):
 
         assignments = cursor.fetchall()
 
+        submissions = {}
+        if is_parent and assignments:
+            cursor.execute("""
+                SELECT assignment_id, submitted_at, file_path
+                FROM lms.assignment_submissions
+                WHERE student_id = %s
+                  AND assignment_id = ANY(%s)
+                ORDER BY submitted_at DESC
+            """, (active_student_id, [assignment["assignment_id"] for assignment in assignments]))
+            for submission in cursor.fetchall():
+                submissions.setdefault(submission["assignment_id"], {
+                    "submitted_at": submission["submitted_at"],
+                    "file_path": submission["file_path"]
+                })
+
         cursor.close()
         conn.close()
 
@@ -96,7 +149,9 @@ def get_section_detail(section_id):
             "description": section["description"] or "",
             "display_order": section["display_order"],
             "lessons": [],
-            "assignments": []
+            "assignments": [],
+            "is_parent": is_parent,
+            "active_student_id": active_student_id if is_parent else None
         }
 
         for lesson in lessons:
@@ -127,7 +182,9 @@ def get_section_detail(section_id):
                 "attachment_url": assignment["attachment_url"] or "",
                 "display_order": assignment["display_order"],
                 "deadline": assignment["deadline"].isoformat() if assignment["deadline"] else None,
-                "max_score": float(assignment["max_score"]) if assignment["max_score"] is not None else 100.0
+                "max_score": float(assignment["max_score"]) if assignment["max_score"] is not None else 100.0,
+                "submitted_at": as_wib_iso((submissions.get(assignment["assignment_id"]) or {}).get("submitted_at")),
+                "submission_file_path": (submissions.get(assignment["assignment_id"]) or {}).get("file_path")
             })
 
         return result
@@ -135,6 +192,115 @@ def get_section_detail(section_id):
     except Exception as e:
         frappe.logger("bima_lms").error(f"Error get_section_detail: {str(e)}")
         frappe.throw(f"Gagal mengambil detail bab: {str(e)}")
+
+
+@frappe.whitelist()
+def rename_uploaded_file(file_path):
+    """Rename an uploaded Frappe file with a unique WIB timestamp."""
+    if not file_path or not file_path.startswith(("/files/", "/private/files/")):
+        frappe.throw("Lokasi file tidak valid.", frappe.ValidationError)
+
+    file_doc = frappe.db.get_value(
+        "File", {"file_url": file_path}, ["name", "file_name", "is_private", "owner"], as_dict=True
+    )
+    if not file_doc or file_doc.owner != frappe.session.user:
+        frappe.throw("File tidak ditemukan atau tidak dapat diubah.", frappe.PermissionError)
+
+    original_name = os.path.basename(file_doc.file_name or file_path.rsplit("/", 1)[-1])
+    stem, extension = os.path.splitext(original_name)
+    if extension.lower() != ".pdf":
+        frappe.throw("File jawaban harus berformat PDF.", frappe.ValidationError)
+
+    timestamp = datetime.now(WIB).strftime("%Y%m%d_%H%M%S_%f")
+    new_name = f"{stem}_{timestamp}{extension.lower()}"
+    base_path = frappe.get_site_path("private" if file_doc.is_private else "public", "files")
+    old_path = os.path.join(base_path, os.path.basename(file_path))
+    new_path = os.path.join(base_path, new_name)
+    if not os.path.isfile(old_path):
+        frappe.throw("File hasil upload tidak ditemukan.", frappe.DoesNotExistError)
+
+    shutil.move(old_path, new_path)
+    new_url = f"/private/files/{new_name}" if file_doc.is_private else f"/files/{new_name}"
+    frappe.db.set_value("File", file_doc.name, {"file_name": new_name, "file_url": new_url})
+    return {"file_url": new_url, "file_name": new_name}
+
+
+@frappe.whitelist()
+def submit_assignment(assignment_id, file_path, student_id=None):
+    """Simpan satu submission PDF untuk siswa aktif milik parent."""
+    if not assignment_id or not file_path:
+        frappe.throw("Assignment dan file jawaban wajib diisi.", frappe.MandatoryError)
+
+    if not str(file_path).lower().endswith(".pdf"):
+        frappe.throw("File jawaban harus berformat PDF.", frappe.ValidationError)
+
+    if not student_id:
+        frappe.throw("Akun anak belum dipilih.", frappe.PermissionError)
+
+    conn = get_pg_connection()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT 1
+                FROM auth.parent_student_relations psr
+                JOIN auth.users pu ON pu.user_id = psr.parent_user_id
+                WHERE pu.user_email = %s AND psr.student_user_id = %s
+                LIMIT 1
+            """, (frappe.session.user, student_id))
+            if not cur.fetchone():
+                frappe.throw("Akun anak tidak valid untuk pengguna ini.", frappe.PermissionError)
+
+            cur.execute("""
+                SELECT a.assignment_id, a.deadline
+                FROM lms.assignments a
+                WHERE a.assignment_id = %s AND a.is_deleted = false
+                FOR UPDATE
+            """, (assignment_id,))
+            assignment = cur.fetchone()
+            if not assignment:
+                frappe.throw("Tugas tidak ditemukan.", frappe.DoesNotExistError)
+
+            cur.execute("""
+                SELECT submission_id, submitted_at
+                FROM lms.assignment_submissions
+                WHERE assignment_id = %s AND student_id = %s
+                LIMIT 1
+            """, (assignment_id, student_id))
+            existing = cur.fetchone()
+            if existing:
+                return {
+                    "status": "already_submitted",
+                    "submitted_at": as_wib_iso(existing["submitted_at"])
+                }
+
+            cur.execute("""
+                INSERT INTO lms.assignment_submissions
+                    (assignment_id, student_id, file_path, submitted_at, is_late,
+                     score, feedback_notes, graded_by, graded_at)
+                VALUES (%s, %s, %s, NOW() AT TIME ZONE 'Asia/Jakarta',
+                    (%s IS NOT NULL AND (NOW() AT TIME ZONE 'Asia/Jakarta') > %s),
+                    NULL, NULL, NULL, NULL)
+                RETURNING submission_id, submitted_at
+            """, (
+                assignment_id,
+                student_id,
+                file_path,
+                assignment["deadline"],
+                assignment["deadline"]
+            ))
+            submission = cur.fetchone()
+        conn.commit()
+        return {
+            "status": "success",
+            "submission_id": submission["submission_id"],
+            "submitted_at": as_wib_iso(submission["submitted_at"])
+        }
+    except Exception as e:
+        conn.rollback()
+        frappe.logger("bima_lms").error(f"Error submit_assignment: {str(e)}")
+        frappe.throw(f"Gagal mengumpulkan tugas: {str(e)}")
+    finally:
+        conn.close()
 
 
 def get_embed_video_url(url):
@@ -244,6 +410,8 @@ def batch_save_section_detail(section_id, section_title=None, description=None, 
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s, false)
                     """, (section_id, lesson_title, lesson_type, article_content, pdf_attachment_url, video_url, display_order))
 
+        update_course_total_lessons(cursor, course_id)
+
         # 4. Handle Assignments (Soft Delete & Insert/Update)
         if deleted_assignment_ids:
             cursor.execute("""
@@ -277,7 +445,7 @@ def batch_save_section_detail(section_id, section_title=None, description=None, 
                     cursor.execute("""
                         INSERT INTO lms.assignments (
                             course_id, section_id, title, instructions, attachment_url, deadline, max_score, display_order, created_by, is_deleted
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, false)
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, false)
                     """, (course_id, section_id, title, instructions, attachment_url, deadline, max_score, display_order, current_user_id))
 
         conn.commit()

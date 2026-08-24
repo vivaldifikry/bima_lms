@@ -42,7 +42,27 @@ def get_current_user_id(conn=None):
     finally:
         if should_close_conn:
             conn.close()
-            
+
+
+def update_course_total_lessons(cursor, course_id):
+    """Update the cached count of active lessons across the course sections."""
+    if not course_id:
+        return
+
+    cursor.execute("""
+        UPDATE lms.courses c
+        SET total_lessons = (
+            SELECT COUNT(*)
+            FROM lms.course_lessons cl
+            JOIN lms.course_sections cs ON cs.section_id = cl.section_id
+            WHERE cs.course_id = c.course_id
+              AND cs.is_deleted = false
+              AND cl.is_deleted = false
+        )
+        WHERE c.course_id = %s
+    """, (course_id,))
+
+
 # Fungsi untuk mengubah URL video menjadi format embed di iframe, mendukung YouTube dan Vimeo
 def get_embed_video_url(url):
     """
@@ -65,7 +85,7 @@ def get_embed_video_url(url):
 
 # API untuk mengambil detail mata pelajaran (course) berdasarkan course_id di PostgreSQL
 @frappe.whitelist()
-def get_course_detail(course_id=None):
+def get_course_detail(course_id=None, active_student_id=None):
     """
     Mengambil detail mata pelajaran berdasarkan course_id.
     """
@@ -73,13 +93,16 @@ def get_course_detail(course_id=None):
         frappe.throw("Parameter course_id diperlukan.", frappe.MandatoryError)
 
     current_user_email = frappe.session.user
+    active_student_id = active_student_id or None
     user_roles = frappe.get_roles(current_user_email)
-    allowed_roles = ["LMS Admin", "LMS Teacher", "System Manager"]
+    is_builtin_admin = current_user_email == "Administrator"
+    allowed_roles = ["Administrator", "Admin", "LMS Admin", "LMS Teacher", "LMS Parent", "System Manager"]
 
-    if not any(role in user_roles for role in allowed_roles):
+    if not is_builtin_admin and not any(role in user_roles for role in allowed_roles):
         frappe.throw("Anda tidak memiliki akses untuk melihat halaman ini.", frappe.PermissionError)
 
-    is_admin = any(role in user_roles for role in ["LMS Admin", "System Manager"])
+    is_admin = is_builtin_admin or any(role in user_roles for role in ["Administrator", "Admin", "LMS Admin", "System Manager"])
+    is_parent = not is_builtin_admin and "LMS Parent" in user_roles
 
     try:
         conn = get_pg_connection()
@@ -89,6 +112,19 @@ def get_course_detail(course_id=None):
         cursor.execute("SELECT user_id FROM auth.users WHERE user_email = %s AND is_deleted = false LIMIT 1;", (current_user_email,))
         pg_user = cursor.fetchone()
         pg_user_id = pg_user["user_id"] if pg_user else None
+
+        if is_parent:
+            if not active_student_id:
+                frappe.throw("Silakan pilih akun anak terlebih dahulu.", frappe.PermissionError)
+            cursor.execute("""
+                SELECT 1
+                FROM auth.parent_student_relations psr
+                JOIN auth.users pu ON pu.user_id = psr.parent_user_id
+                WHERE pu.user_email = %s AND psr.student_user_id = %s
+                LIMIT 1;
+            """, (current_user_email, active_student_id))
+            if not cursor.fetchone():
+                frappe.throw("Akun anak tidak valid untuk pengguna ini.", frappe.PermissionError)
 
         # Query detail course lengkap
         query = """
@@ -120,14 +156,27 @@ def get_course_detail(course_id=None):
             FROM lms.course_rombels cr
             JOIN master.rombels r ON cr.rombels_id = r.id
             WHERE cr.course_id = %s
+              AND (%s = false OR EXISTS (
+                  SELECT 1 FROM master.rombel_students rs
+                  WHERE rs.rombel_id = cr.rombels_id AND rs.student_id = %s
+              ))
             ORDER BY r.name ASC;
-        """, (course_id,))
+        """, (course_id, is_parent, active_student_id))
         assigned_rombels = cursor.fetchall()
         
         # Non-admin hanya bisa melihat course milik sendiri
         if not is_admin:
-            query += " AND c.instructor_id = %s"
-            cursor.execute(query, (course_id, pg_user_id))
+            if is_parent:
+                query += """ AND EXISTS (
+                    SELECT 1
+                    FROM lms.course_rombels cr_parent
+                    JOIN master.rombel_students rs_parent ON rs_parent.rombel_id = cr_parent.rombels_id
+                    WHERE cr_parent.course_id = c.course_id AND rs_parent.student_id = %s
+                )"""
+                cursor.execute(query, (course_id, active_student_id))
+            else:
+                query += " AND c.instructor_id = %s"
+                cursor.execute(query, (course_id, pg_user_id))
         else:
             cursor.execute(query, (course_id,))
 
@@ -158,7 +207,10 @@ def get_course_detail(course_id=None):
             "last_modified_on": str(row["last_modified_on"]) if row.get("last_modified_on") else "-",
             "total_enrollments": row.get("total_enrollments") or 0,
             "total_lessons": row.get("total_lessons") or 0,
-            "assigned_rombels": [{"id": r["id"], "name": r["name"]} for r in assigned_rombels]
+            "assigned_rombels": [{"id": r["id"], "name": r["name"]} for r in assigned_rombels],
+            "is_parent": is_parent,
+            "can_edit": not is_parent,
+            "active_student_id": active_student_id if is_parent else None
         }
 
     except Exception as e:

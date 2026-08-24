@@ -238,13 +238,17 @@ function load_course_detail(course_id) {
 
     frappe.call({
         method: 'bima_lms.api.courses.get_course_detail',
-        args: { course_id: course_id },
+        args: {
+            course_id: course_id,
+            active_student_id: window.StudentSwitcher ? window.StudentSwitcher.getActiveStudentId() : null
+        },
         callback: function(r) {
             $('#detail-loading').addClass('hidden');
 
             if (r.message) {
                 currentCourseData = r.message;
                 renderViewMode();
+                applyViewerPermissions();
 
                 // Render komponen Information Course
                 if (window.InformationCourseComponent) {
@@ -282,7 +286,14 @@ function renderViewMode() {
     toggleViewMode();
 }
 
+function applyViewerPermissions() {
+    const isParent = Boolean(currentCourseData && currentCourseData.is_parent);
+    $('#btn-assign-rombel, #btn-enable-edit').toggleClass('hidden', isParent);
+    if (isParent) $('#edit-mode-actions').addClass('hidden');
+}
+
 function toggleEditMode() {
+    if (currentCourseData && currentCourseData.is_parent) return;
     loadCategoriesDropdown(currentCourseData.category_id);
 
     $('#edit-title').val(currentCourseData.course_title);
