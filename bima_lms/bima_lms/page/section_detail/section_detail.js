@@ -421,6 +421,52 @@ function bindGlobalEvents() {
             }
         });
     });
+
+    $(document).off('input', '.input-submission-score').on('input', '.input-submission-score', function() {
+        updateGradeButton($(this).closest('.submission-grade-row'));
+    });
+
+    $(document).off('click', '.btn-edit-grade').on('click', '.btn-edit-grade', function() {
+        const $row = $(this).closest('.submission-grade-row');
+        $row.data('original-score', $row.find('.input-submission-score').val());
+        $row.data('original-feedback', $row.find('.input-submission-feedback').val());
+        $row.find('.input-submission-score, .input-submission-feedback').prop('disabled', false);
+        $row.find('.btn-edit-grade').addClass('hidden');
+        $row.find('.btn-cancel-grade, .btn-submit-grade').removeClass('hidden');
+        updateGradeButton($row);
+    });
+
+    $(document).off('click', '.btn-cancel-grade').on('click', '.btn-cancel-grade', function() {
+        const $row = $(this).closest('.submission-grade-row');
+        $row.find('.input-submission-score').val($row.data('original-score'));
+        $row.find('.input-submission-feedback').val($row.data('original-feedback'));
+        $row.find('.input-submission-score, .input-submission-feedback').prop('disabled', true);
+        $row.find('.btn-cancel-grade, .btn-submit-grade').addClass('hidden');
+        $row.find('.btn-edit-grade').removeClass('hidden');
+    });
+
+    $(document).off('click', '.btn-submit-grade').on('click', '.btn-submit-grade', function() {
+        const $row = $(this).closest('.submission-grade-row');
+        const score = $row.find('.input-submission-score').val();
+        if (!isValidSubmissionScore(score, Number($row.data('max-score')))) return;
+
+        frappe.call({
+            method: 'bima_lms.api.section_details.grade_assignment_submission',
+            args: {
+                submission_id: $row.data('submission-id'),
+                score: score,
+                feedback_notes: $row.find('.input-submission-feedback').val()
+            },
+            freeze: true,
+            freeze_message: __('Menyimpan nilai...'),
+            callback: function(response) {
+                if (response.message && response.message.status === 'success') {
+                    frappe.show_alert({ message: __('Nilai berhasil disimpan'), indicator: 'green' });
+                    loadSectionDetail(currentSectionId);
+                }
+            }
+        });
+    });
 }
 
 function swapArrayElements(arr, i, j) {
@@ -870,24 +916,89 @@ function formatDatetimeInput(dateStr) {
 }
 
 function renderAssignmentSubmissionControl(assignment) {
+    if (currentSectionData.is_teacher) {
+        if (!assignment.submissions || !assignment.submissions.length) {
+            return '<p class="border-t border-gray-100 pt-4 text-sm text-gray-500">Belum ada siswa yang mengumpulkan tugas.</p>';
+        }
+        return `<div class="border-t border-gray-100 pt-4 space-y-4">
+            ${assignment.submissions.map(submission => renderSubmissionGradeRow(submission, assignment.max_score)).join('')}
+        </div>`;
+    }
+
     if (!currentSectionData.is_parent) return '';
 
     if (assignment.submitted_at) {
         const submittedFileUrl = assignment.submission_file_path ? escapeHtml(assignment.submission_file_path) : '';
-        return `<div class="border-t border-gray-100 pt-4 flex flex-wrap items-center justify-between gap-3">
-            <span class="text-sm font-semibold text-emerald-700">Anda sudah mengumpulkan tugas pada ${formatSubmissionDate(assignment.submitted_at)}</span>
+        return `<div class="border-t border-gray-100 pt-4 space-y-3">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
+                <div class="space-y-1">
+                    <span class="text-sm font-semibold text-emerald-700">Anda sudah mengumpulkan tugas </span> <span class="text-xs text-gray-500">pada ${formatSubmissionDate(assignment.submitted_at)}</span>
             ${submittedFileUrl ? `<a href="${submittedFileUrl}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 text-sm font-semibold text-indigo-600 hover:text-indigo-800 hover:underline">
                 <span>Lihat tugas Anda</span>
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4m-4-8h6m0 0v6m0-6L10 14"></path></svg>
             </a>` : ''}
+                </div>
+                <div class="sm:text-right text-sm">
+                    <span class="text-gray-500">Nilai</span>
+                    <p class="font-bold text-gray-900">${assignment.score === null || assignment.score === undefined ? '-' : assignment.score}</p>
+                </div>
+            </div>
+            ${assignment.feedback_notes ? `<div class="rounded-lg bg-gray-50 border border-gray-200 px-3 py-2 text-sm text-gray-700 whitespace-pre-line">
+                <span class="font-semibold text-gray-900">Catatan guru</span>
+                <p class="mt-1">${escapeHtml(assignment.feedback_notes)}</p>
+            </div>` : ''}
         </div>`;
     }
 
-    return `<div class="border-t border-gray-100 pt-4 space-y-2">
+    return `<div class="border-t border-gray-100 pt-4 flex justify-end">
         <button type="button" class="btn-upload-assignment inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-colors" data-assignment-id="${assignment.assignment_id}">
             <span>Upload File Jawaban</span>
         </button>
     </div>`;
+}
+
+function renderSubmissionGradeRow(submission, maxScore) {
+    const score = submission.score === null || submission.score === undefined ? '' : submission.score;
+    const hasScore = score !== '';
+    const fieldState = hasScore ? 'disabled' : '';
+    const saveState = hasScore || !isValidSubmissionScore(score, maxScore) ? 'disabled' : '';
+    return `<div class="submission-grade-row rounded-lg border border-gray-200 bg-gray-50 p-4" data-submission-id="${submission.submission_id}" data-max-score="${maxScore}">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 items-start">
+            <div class="space-y-1 text-sm">
+            <p class="font-semibold text-gray-900">${escapeHtml(submission.student_name)}</p>
+            <p class="text-gray-600">NISN: ${escapeHtml(submission.nisn)}</p>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <input type="number" class="input-submission-score w-full px-3 py-2 text-sm border border-gray-300 rounded-lg disabled:bg-gray-100 disabled:text-gray-500" min="0" max="${maxScore}" step="0.01" value="${score}" placeholder="Nilai (0-${maxScore})" ${fieldState}>
+                <textarea rows="1" class="input-submission-feedback w-full px-3 py-2 text-sm border border-gray-300 rounded-lg disabled:bg-gray-100 disabled:text-gray-500" placeholder="Catatan (opsional)" ${fieldState}>${escapeHtml(submission.feedback_notes || '')}</textarea>
+            </div>
+        </div>
+        <div class="mt-3 grid grid-cols-1 lg:grid-cols-2 gap-3 items-center border-t border-gray-200 pt-3">
+            <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+                <span class="text-gray-600">Submit: ${formatSubmissionDate(submission.submitted_at)}</span>
+                <a href="${escapeHtml(submission.file_path || '#')}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 font-semibold text-indigo-600 hover:text-indigo-800 hover:underline">
+                    <span>Buka file jawaban</span>
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10v-4m-4-8h6m0 0v6m0-6L10 14"></path></svg>
+                </a>
+            </div>
+            <div class="flex flex-wrap justify-start lg:justify-end gap-2">
+                <button type="button" class="btn-cancel-grade hidden px-3 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-100">Batalkan Perubahan</button>
+                <button type="button" class="btn-edit-grade ${hasScore ? '' : 'hidden'} px-3 py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg">Edit Nilai</button>
+                <button type="button" class="btn-submit-grade ${hasScore ? 'hidden' : ''} px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-lg disabled:opacity-50 disabled:cursor-not-allowed" ${saveState}>Simpan Nilai</button>
+            </div>
+        </div>
+    </div>`;
+}
+
+function isValidSubmissionScore(score, maxScore) {
+    if (score === '' || score === null || score === undefined) return false;
+    const numericScore = Number(score);
+    return Number.isFinite(numericScore) && numericScore >= 0 && numericScore <= maxScore;
+}
+
+function updateGradeButton($row) {
+    const score = $row.find('.input-submission-score').val();
+    $row.find('.btn-submit-grade').prop('disabled', !isValidSubmissionScore(score, Number($row.data('max-score'))));
 }
 
 function formatSubmissionDate(dateStr) {

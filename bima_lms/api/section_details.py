@@ -35,6 +35,7 @@ def get_section_detail(section_id, active_student_id=None):
         active_student_id = active_student_id or None
         is_builtin_admin = frappe.session.user == "Administrator"
         is_parent = not is_builtin_admin and "LMS Parent" in user_roles
+        is_teacher = not is_builtin_admin and "LMS Teacher" in user_roles
 
         if is_parent:
             if not active_student_id:
@@ -123,19 +124,22 @@ def get_section_detail(section_id, active_student_id=None):
         assignments = cursor.fetchall()
 
         submissions = {}
-        if is_parent and assignments:
+        if (is_parent or is_teacher) and assignments:
             cursor.execute("""
-                SELECT assignment_id, submitted_at, file_path
-                FROM lms.assignment_submissions
-                WHERE student_id = %s
-                  AND assignment_id = ANY(%s)
+                SELECT sub.submission_id, sub.assignment_id, sub.submitted_at,
+                       sub.file_path, sub.score, sub.feedback_notes,
+                       s.full_name AS student_name, s.nisn
+                FROM lms.assignment_submissions sub
+                JOIN kelaskita.students s ON s.id = sub.student_id
+                WHERE sub.assignment_id = ANY(%s)
+                  AND (%s = false OR sub.student_id = %s)
                 ORDER BY submitted_at DESC
-            """, (active_student_id, [assignment["assignment_id"] for assignment in assignments]))
+            """, ([assignment["assignment_id"] for assignment in assignments], is_parent, active_student_id))
             for submission in cursor.fetchall():
-                submissions.setdefault(submission["assignment_id"], {
-                    "submitted_at": submission["submitted_at"],
-                    "file_path": submission["file_path"]
-                })
+                if is_parent:
+                    submissions.setdefault(submission["assignment_id"], submission)
+                else:
+                    submissions.setdefault(submission["assignment_id"], []).append(submission)
 
         cursor.close()
         conn.close()
@@ -151,6 +155,7 @@ def get_section_detail(section_id, active_student_id=None):
             "lessons": [],
             "assignments": [],
             "is_parent": is_parent,
+            "is_teacher": is_teacher,
             "active_student_id": active_student_id if is_parent else None
         }
 
@@ -173,6 +178,7 @@ def get_section_detail(section_id, active_student_id=None):
             })
 
         for assignment in assignments:
+            parent_submission = submissions.get(assignment["assignment_id"]) if is_parent else {}
             result["assignments"].append({
                 "assignment_id": assignment["assignment_id"],
                 "course_id": assignment["course_id"],
@@ -183,8 +189,22 @@ def get_section_detail(section_id, active_student_id=None):
                 "display_order": assignment["display_order"],
                 "deadline": assignment["deadline"].isoformat() if assignment["deadline"] else None,
                 "max_score": float(assignment["max_score"]) if assignment["max_score"] is not None else 100.0,
-                "submitted_at": as_wib_iso((submissions.get(assignment["assignment_id"]) or {}).get("submitted_at")),
-                "submission_file_path": (submissions.get(assignment["assignment_id"]) or {}).get("file_path")
+                "submitted_at": as_wib_iso((parent_submission or {}).get("submitted_at")),
+                "submission_file_path": (parent_submission or {}).get("file_path"),
+                "score": float(parent_submission["score"]) if parent_submission and parent_submission["score"] is not None else None,
+                "feedback_notes": (parent_submission or {}).get("feedback_notes") or "",
+                "submissions": [
+                    {
+                        "submission_id": submission["submission_id"],
+                        "student_name": submission["student_name"] or "Tanpa Nama",
+                        "nisn": submission["nisn"] or "-",
+                        "submitted_at": as_wib_iso(submission["submitted_at"]),
+                        "file_path": submission["file_path"],
+                        "score": float(submission["score"]) if submission["score"] is not None else None,
+                        "feedback_notes": submission["feedback_notes"] or ""
+                    }
+                    for submission in (submissions.get(assignment["assignment_id"]) or [])
+                ] if is_teacher else []
             })
 
         return result
@@ -299,6 +319,68 @@ def submit_assignment(assignment_id, file_path, student_id=None):
         conn.rollback()
         frappe.logger("bima_lms").error(f"Error submit_assignment: {str(e)}")
         frappe.throw(f"Gagal mengumpulkan tugas: {str(e)}")
+    finally:
+        conn.close()
+
+
+@frappe.whitelist()
+def grade_assignment_submission(submission_id, score, feedback_notes=None):
+    """Simpan nilai dan catatan guru untuk satu submission."""
+    if not submission_id:
+        frappe.throw("Submission tidak ditemukan.", frappe.MandatoryError)
+
+    user_roles = frappe.get_roles(frappe.session.user)
+    is_admin = frappe.session.user == "Administrator" or any(
+        role in user_roles for role in ["LMS Admin", "System Manager"]
+    )
+    if not is_admin and "LMS Teacher" not in user_roles:
+        frappe.throw("Anda tidak memiliki akses untuk menilai tugas.", frappe.PermissionError)
+
+    try:
+        from decimal import Decimal, InvalidOperation
+        score_value = Decimal(str(score))
+        if not score_value.is_finite():
+            raise InvalidOperation
+    except (InvalidOperation, TypeError, ValueError):
+        frappe.throw("Nilai harus berupa angka.", frappe.ValidationError)
+
+    conn = get_pg_connection()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            current_user_id = get_current_user_id(conn)
+            cur.execute("""
+                SELECT sub.submission_id, a.max_score, c.instructor_id
+                FROM lms.assignment_submissions sub
+                JOIN lms.assignments a ON a.assignment_id = sub.assignment_id
+                JOIN lms.course_sections cs ON cs.section_id = a.section_id
+                JOIN lms.courses c ON c.course_id = cs.course_id
+                WHERE sub.submission_id = %s AND a.is_deleted = false
+                FOR UPDATE
+            """, (submission_id,))
+            submission = cur.fetchone()
+            if not submission:
+                frappe.throw("Submission tidak ditemukan.", frappe.DoesNotExistError)
+            if not is_admin and submission["instructor_id"] != current_user_id:
+                frappe.throw("Anda hanya dapat menilai tugas pada course sendiri.", frappe.PermissionError)
+
+            max_score = Decimal(str(submission["max_score"] or 100))
+            if score_value < 0 or score_value > max_score:
+                frappe.throw(f"Nilai harus berada di antara 0 dan {max_score}.", frappe.ValidationError)
+
+            cur.execute("""
+                UPDATE lms.assignment_submissions
+                SET score = %s,
+                    feedback_notes = %s,
+                    graded_by = %s,
+                    graded_at = NOW() AT TIME ZONE 'Asia/Jakarta'
+                WHERE submission_id = %s
+            """, (score_value, feedback_notes or None, current_user_id, submission_id))
+        conn.commit()
+        return {"status": "success", "message": "Nilai berhasil disimpan."}
+    except Exception as e:
+        conn.rollback()
+        frappe.logger("bima_lms").error(f"Error grade_assignment_submission: {str(e)}")
+        frappe.throw(f"Gagal menyimpan nilai: {str(e)}")
     finally:
         conn.close()
 
