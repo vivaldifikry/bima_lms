@@ -43,7 +43,56 @@ def get_current_user_id(conn=None):
         if should_close_conn:
             conn.close()
 
+# API untuk mengambil data chart assignment di workspace
+@frappe.whitelist()
+def get_assignment_chart_for_workspace(chart_name=None, filters=None):
+    """
+    Fungsi khusus untuk Frappe Dashboard Chart di Workspace
+    """
+    conn = get_pg_connection()
+    cursor = conn.cursor()
 
+    cursor.execute("""
+        SELECT 
+            a.title AS assignment_title,
+            st.full_name AS student_name,
+            COALESCE(sub.score, 0) AS score
+        FROM lms.assignment_submissions sub
+        JOIN lms.assignments a ON sub.assignment_id = a.assignment_id
+        JOIN kelaskita.students st ON sub.student_id = st.id
+        WHERE sub.score IS NOT NULL AND sub.is_deleted = false
+        ORDER BY a.display_order ASC, st.full_name ASC;
+    """)
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    if not rows:
+        return {"data": {"labels": [], "datasets": []}}
+
+    labels = list(dict.fromkeys([r[0] for r in rows]))
+    students_data = {}
+    for assignment_title, student_name, score in rows:
+        if student_name not in students_data:
+            students_data[student_name] = {l: 0 for l in labels}
+        students_data[student_name][assignment_title] = float(score)
+
+    datasets = []
+    for student_name, scores_map in students_data.items():
+        datasets.append({
+            "name": student_name,
+            "values": [scores_map[l] for l in labels]
+        })
+
+    # PENTING: Frappe Dashboard Chart membaca atribut "data"
+    return {
+        "data": {
+            "labels": labels,
+            "datasets": datasets
+        }
+    }
+
+# Fungsi untuk memperbarui jumlah total lesson di course
 def update_course_total_lessons(cursor, course_id):
     """Update the cached count of active lessons across the course sections."""
     if not course_id:
@@ -228,13 +277,24 @@ def get_user_courses(student_id=None, rombel_ids=None, category_ids=None):
     """
     current_user_email = frappe.session.user
 
-    user_roles = frappe.get_roles(current_user_email)
-    allowed_roles = ["LMS Admin", "LMS Teacher", "LMS Parent", "LMS Student", "System Manager"]
-    
+    user_roles = frappe.get_roles(current_user_email) or []
+    allowed_roles = [
+        "Administrator",
+        "Admin",
+        "LMS Admin",
+        "LMS Teacher",
+        "LMS Parent",
+        "LMS Student",
+        "System Manager"
+    ]
+
+    if current_user_email == "Administrator":
+        user_roles = list(dict.fromkeys(user_roles + ["Administrator"]))
+
     if not any(role in user_roles for role in allowed_roles):
         frappe.throw("Anda tidak memiliki akses untuk melihat halaman ini.", frappe.PermissionError)
 
-    is_admin = any(role in user_roles for role in ["LMS Admin", "System Manager"])
+    is_admin = any(role in user_roles for role in ["Administrator", "Admin", "LMS Admin", "System Manager"])
     is_parent = "LMS Parent" in user_roles
     is_teacher = "LMS Teacher" in user_roles
 
@@ -364,6 +424,328 @@ def get_user_courses(student_id=None, rombel_ids=None, category_ids=None):
         frappe.logger("bima_lms").error(f"Error get_user_courses: {str(e)}")
         frappe.throw(f"Gagal mengambil data mata pelajaran: {str(e)}")
 
+# Fungsi untuk mengambil data chart nilai siswa
+@frappe.whitelist()
+def get_course_score_chart_data(student_id=None):
+    """
+    Mengambil data nilai siswa untuk chart.
+    - Jika student_id diberikan: data untuk 1 siswa (vertical bar chart untuk parent)
+    - Jika tidak: data untuk semua siswa (horizontal bar chart untuk admin/guru)
+    """
+    current_user_email = frappe.session.user
+    user_roles = frappe.get_roles(current_user_email) or []
+    
+    frappe.logger("bima_lms").info(f"=== get_course_score_chart_data START ===")
+    frappe.logger("bima_lms").info(f"User: {current_user_email}")
+    frappe.logger("bima_lms").info(f"Roles: {user_roles}")
+    frappe.logger("bima_lms").info(f"student_id: {student_id}")
+    
+    # Cek role
+    is_admin = current_user_email == "Administrator" or any(role in user_roles for role in ["Administrator", "Admin", "LMS Admin", "System Manager"])
+    is_teacher = "LMS Teacher" in user_roles
+    is_parent = "LMS Parent" in user_roles
+    
+    frappe.logger("bima_lms").info(f"is_admin: {is_admin}, is_teacher: {is_teacher}, is_parent: {is_parent}")
+    
+    # Logika akses
+    if is_admin or is_teacher:
+        pass
+    elif is_parent:
+        if not student_id:
+            return {
+                "visible": False,
+                "message": "Silakan pilih akun anak terlebih dahulu.",
+                "labels": [],
+                "datasets": [],
+                "is_single_student": False
+            }
+    else:
+        return {
+            "visible": False,
+            "message": "Anda tidak memiliki akses untuk melihat chart nilai siswa.",
+            "labels": [],
+            "datasets": [],
+            "is_single_student": False
+        }
+
+    try:
+        conn = get_pg_connection()
+        cursor = conn.cursor()
+
+        pg_user_id = get_current_user_id(conn=conn)
+        frappe.logger("bima_lms").info(f"pg_user_id: {pg_user_id}")
+
+        # STEP 1: Dapatkan daftar course yang relevan
+        course_query = """
+            SELECT DISTINCT
+                c.course_id,
+                c.course_title
+            FROM lms.courses c
+            WHERE c.is_deleted = false 
+              AND c.status = 'PUBLISHED'
+              AND EXISTS (
+                  SELECT 1 FROM lms.assignments a 
+                  WHERE a.course_id = c.course_id 
+                  AND a.is_deleted = false
+              )
+        """
+        
+        course_params = []
+        
+        if is_teacher and not is_admin:
+            course_query += " AND c.instructor_id = %s"
+            course_params.append(pg_user_id)
+            frappe.logger("bima_lms").info(f"Filtering courses for teacher: {pg_user_id}")
+        
+        cursor.execute(course_query, tuple(course_params))
+        relevant_courses = cursor.fetchall()
+        
+        if not relevant_courses:
+            return {
+                "visible": True,
+                "labels": [],
+                "datasets": [],
+                "message": "Tidak ada course dengan tugas yang tersedia.",
+                "is_single_student": bool(student_id)
+            }
+        
+        course_ids = [row[0] for row in relevant_courses]
+        frappe.logger("bima_lms").info(f"Relevant course IDs: {course_ids}")
+        
+        # STEP 2: Query untuk mengambil data
+        # PERBAIKAN: Gunakan f-string dengan hati-hati untuk placeholders
+        placeholders = ','.join(['%s'] * len(course_ids))
+        
+        # PERBAIKAN: Query dengan parameter yang benar
+        query = f"""
+            SELECT 
+                cs.student_id AS student_id,
+                cs.student_name AS student_name,
+                cs.course_id AS course_id,
+                al.assignment_id AS assignment_id,
+                al.title AS assignment_title,
+                al.max_score AS max_score,
+                al.deadline AS deadline,
+                COALESCE(sub.score, -1) AS score,
+                sub.submitted_at AS submitted_at,
+                sub.is_late AS is_late,
+                CASE 
+                    WHEN sub.submission_id IS NOT NULL THEN 'submitted'
+                    ELSE 'not_submitted'
+                END AS submission_status,
+                rc.instructor_id AS instructor_id,
+                rc.course_title AS course_title
+            FROM (
+                SELECT DISTINCT
+                    ce.course_id AS course_id,
+                    ce.student_id AS student_id,
+                    st.full_name AS student_name,
+                    st.id AS student_id_internal
+                FROM lms.course_enrollments ce
+                JOIN kelaskita.students st ON ce.student_id = st.id
+                WHERE ce.course_id IN ({placeholders})
+                  AND ce.status = 'ENROLLED'
+                  AND st.is_deleted = false
+        """
+        
+        # Jika student_id diberikan, tambahkan filter
+        if student_id:
+            query += " AND ce.student_id = %s"
+        
+        query += f"""
+            ) cs
+            JOIN (
+                SELECT 
+                    c.course_id AS course_id,
+                    c.instructor_id AS instructor_id,
+                    c.course_title AS course_title
+                FROM lms.courses c
+                WHERE c.course_id IN ({placeholders})
+                  AND c.is_deleted = false 
+                  AND c.status = 'PUBLISHED'
+            ) rc ON cs.course_id = rc.course_id
+            JOIN (
+                SELECT 
+                    a.assignment_id AS assignment_id,
+                    a.course_id AS course_id,
+                    a.title AS title,
+                    a.max_score AS max_score,
+                    a.deadline AS deadline,
+                    a.section_id AS section_id
+                FROM lms.assignments a
+                WHERE a.is_deleted = false
+                  AND a.course_id IN ({placeholders})
+            ) al ON cs.course_id = al.course_id
+            LEFT JOIN lms.assignment_submissions sub 
+                ON sub.assignment_id = al.assignment_id 
+                AND sub.student_id = cs.student_id
+            ORDER BY cs.student_name ASC, al.assignment_id ASC;
+        """
+        
+        # PERBAIKAN: Build parameters dengan benar
+        params = []
+        
+        # Untuk course_students (IN clause pertama)
+        params.extend(course_ids)
+        
+        # Tambahkan student_id jika ada
+        if student_id:
+            params.append(student_id)
+        
+        # Untuk relevant_courses (IN clause kedua)
+        params.extend(course_ids)
+        
+        # Untuk assignment_list (IN clause ketiga)
+        params.extend(course_ids)
+        
+        frappe.logger("bima_lms").info(f"Query params count: {len(params)}")
+        frappe.logger("bima_lms").info(f"Query params: {params}")
+        
+        cursor.execute(query, tuple(params))
+        rows = cursor.fetchall()
+        
+        frappe.logger("bima_lms").info(f"Query returned {len(rows)} rows")
+        
+        cursor.close()
+        conn.close()
+
+        if not rows:
+            return {
+                "visible": True,
+                "labels": [],
+                "datasets": [],
+                "message": "Tidak ada data nilai yang tersedia.",
+                "is_single_student": bool(student_id)
+            }
+
+        # Proses data
+        students_data = {}
+        assignments_info = {}
+        student_courses = {}
+        course_names = {}
+        
+        for row in rows:
+            (student_id_val, student_name, course_id, assignment_id, assignment_title, 
+             max_score, deadline, score, submitted_at, is_late, submission_status, 
+             instructor_id, course_title) = row
+            
+            if course_id not in course_names:
+                course_names[course_id] = course_title or f"Course {course_id}"
+            
+            if student_name not in students_data:
+                students_data[student_name] = {
+                    'student_id': student_id_val,
+                    'courses': {}
+                }
+            
+            if course_id not in students_data[student_name]['courses']:
+                students_data[student_name]['courses'][course_id] = {
+                    'course_title': course_names[course_id],
+                    'assignments': {}
+                }
+            
+            if assignment_id not in assignments_info:
+                assignments_info[assignment_id] = {
+                    'title': assignment_title,
+                    'max_score': float(max_score) if max_score else 100,
+                    'deadline': deadline,
+                    'course_id': course_id,
+                    'course_title': course_names[course_id]
+                }
+            
+            students_data[student_name]['courses'][course_id]['assignments'][assignment_id] = {
+                'title': assignment_title,
+                'score': float(score) if score and score != -1 else None,
+                'max_score': float(max_score) if max_score else 100,
+                'submitted_at': submitted_at,
+                'is_late': is_late,
+                'status': submission_status
+            }
+            
+            if student_name not in student_courses:
+                student_courses[student_name] = set()
+            student_courses[student_name].add(course_id)
+
+        student_names = sorted(students_data.keys())
+        assignment_ids = sorted(assignments_info.keys(), key=lambda x: (assignments_info[x]['course_id'], assignments_info[x]['title']))
+        
+        frappe.logger("bima_lms").info(f"Processed: {len(student_names)} students, {len(assignment_ids)} assignments")
+        
+        datasets = []
+        for assignment_id in assignment_ids:
+            assignment = assignments_info[assignment_id]
+            values = []
+            statuses = []
+            
+            for student_name in student_names:
+                student = students_data[student_name]
+                is_enrolled = assignment['course_id'] in student['courses']
+                
+                if not is_enrolled:
+                    values.append(0)
+                    statuses.append('not_enrolled')
+                else:
+                    assignment_data = student['courses'][assignment['course_id']]['assignments'].get(assignment_id)
+                    if assignment_data and assignment_data['status'] == 'submitted':
+                        values.append(assignment_data['score'] or 0)
+                        statuses.append('submitted')
+                    else:
+                        values.append(0)
+                        statuses.append('not_submitted')
+            
+            label = f"{assignment['title']} ({assignment['course_title']})"
+            if len(label) > 30:
+                label = label[:27] + '...'
+            
+            datasets.append({
+                'name': label,
+                'assignment_id': assignment_id,
+                'course_id': assignment['course_id'],
+                'course_title': assignment['course_title'],
+                'max_score': assignment['max_score'],
+                'deadline': assignment['deadline'],
+                'values': values,
+                'statuses': statuses,
+                'color': ''
+            })
+
+        is_single = bool(student_id and len(student_names) == 1)
+        title = "Perbandingan Nilai Siswa per Tugas"
+        if is_single and student_names:
+            title = f"Nilai {student_names[0]}"
+        
+        result = {
+            "visible": True,
+            "labels": student_names,
+            "datasets": datasets,
+            "students_data": students_data,
+            "assignments_info": assignments_info,
+            "student_courses": student_courses,
+            "course_names": course_names,
+            "title": title,
+            "subtitle": f"{len(student_names)} siswa · {len(datasets)} tugas",
+            "is_single_student": is_single
+        }
+        
+        frappe.logger("bima_lms").info(f"Returning result with {len(datasets)} datasets, {len(student_names)} students")
+        frappe.logger("bima_lms").info(f"is_single_student: {result['is_single_student']}")
+        frappe.logger("bima_lms").info(f"=== get_course_score_chart_data END ===")
+        
+        return result
+
+    except Exception as e:
+        frappe.logger("bima_lms").error(f"Error get_course_score_chart_data: {str(e)}")
+        import traceback
+        frappe.logger("bima_lms").error(traceback.format_exc())
+        return {
+            "visible": False,
+            "message": str(e),
+            "labels": [],
+            "datasets": [],
+            "is_single_student": False
+        }
+
+# API untuk mengambil daftar rombel yang diikuti oleh seorang siswa
 @frappe.whitelist()
 def get_student_rombels(student_id):
     """
@@ -396,7 +778,8 @@ def get_student_rombels(student_id):
     except Exception as e:
         frappe.logger("bima_lms").error(f"Error get_student_rombels: {str(e)}")
         frappe.throw(f"Gagal mengambil daftar rombel: {str(e)}")
-    
+
+# API untuk mengambil daftar kategori course dari PostgreSQL
 @frappe.whitelist()
 def get_course_categories():
     """Mengambil daftar kategori dari PostgreSQL (schema master)"""
@@ -413,6 +796,7 @@ def get_course_categories():
     finally:
         conn.close()
 
+# API untuk memperbarui detail course di PostgreSQL
 @frappe.whitelist()
 def update_course_detail(course_id, course_title, category_id, status=None, short_description=None, full_description=None, embed_video_url=None):
     """Update data course ke PostgreSQL"""
@@ -504,7 +888,7 @@ def get_course_rombels(course_id):
     finally:
         conn.close()
 
-@frappe.whitelist()
+# API untuk menyimpan atau memperbarui daftar rombel yang di-assign ke course
 @frappe.whitelist()
 def save_course_rombels(course_id, rombel_ids=None):
     """

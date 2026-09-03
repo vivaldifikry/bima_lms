@@ -25,12 +25,93 @@ frappe.pages['courses'].on_page_load = function(wrapper) {
         style.id = 'filter-modal-style';
         style.textContent = `
             /* Custom style untuk checkbox di modal */
-            .filter-modal-checkbox:checked + span {
-                color: #4f46e5;
+            // .filter-modal-checkbox:checked + span {
+            //     color: #4f46e5;
+            // }
+            // .filter-modal-checkbox:checked ~ .checkmark {
+            //     background-color: #4f46e5;
+            //     border-color: #4f46e5;
+            // }
+
+            // .score-chart-scroll {
+            //     overflow-x: auto;
+            //     overflow-y: hidden;
+            //     padding-bottom: 8px;
+            // }
+
+            // .score-chart-scroll svg {
+            //     display: block;
+            //     width: 100%;
+            //     min-width: 760px;
+            //     height: auto;
+            // }
+
+            // .score-chart-legend {
+            //     display: flex;
+            //     flex-wrap: wrap;
+            //     gap: 8px 12px;
+            //     margin-top: 12px;
+            //     max-height: 120px;
+            //     overflow-y: auto;
+            //     padding-right: 4px;
+            // }
+
+            // .score-chart-legend-item {
+            //     display: inline-flex;
+            //     align-items: center;
+            //     gap: 8px;
+            //     padding: 6px 10px;
+            //     border-radius: 999px;
+            //     background: #f8fafc;
+            //     border: 1px solid #e2e8f0;
+            //     font-size: 11px;
+            //     color: #334155;
+            //     white-space: nowrap;
+            // }
+
+            // .score-chart-legend-swatch {
+            //     width: 10px;
+            //     height: 10px;
+            //     border-radius: 999px;
+            //     display: inline-block;
+            //     box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08);
+            // }
+
+            .score-chart-scroll {
+                overflow: auto !important;
+                max-height: 550px;
+                width: 100%;
+                position: relative;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                background: #ffffff;
             }
-            .filter-modal-checkbox:checked ~ .checkmark {
-                background-color: #4f46e5;
-                border-color: #4f46e5;
+
+            .score-chart-scroll::-webkit-scrollbar {
+                width: 8px;
+                height: 8px;
+            }
+
+            .score-chart-scroll::-webkit-scrollbar-track {
+                background: #f1f5f9;
+                border-radius: 4px;
+            }
+
+            .score-chart-scroll::-webkit-scrollbar-thumb {
+                background: #cbd5e1;
+                border-radius: 4px;
+            }
+
+            .score-chart-scroll::-webkit-scrollbar-thumb:hover {
+                background: #94a3b8;
+            }
+
+            .score-chart-scroll svg {
+                display: block;
+                width: auto !important;
+                height: auto !important;
+                max-width: none !important;
+                max-height: none !important;
             }
         `;
         document.head.appendChild(style);
@@ -100,6 +181,22 @@ frappe.pages['courses'].on_page_load = function(wrapper) {
                         </div>
                     </div>
 
+                    <div id="score-chart-section" class="hidden">
+                        <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+                            <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+                                <div>
+                                    <h2 class="text-lg font-bold text-gray-800">Perbandingan Nilai Siswa</h2>
+                                    <p class="text-sm text-gray-500">Semua nilai siswa dari semua mata pelajaran</p>
+                                </div>
+                                
+                            </div>
+                            <!-- <div id="score-chart-legend" class="score-chart-legend"></div> -->
+                            <div class="score-chart-scroll mt-4">
+                                <svg id="custom-score-chart" viewBox="0 0 1000 420" preserveAspectRatio="xMinYMin meet" aria-label="Chart nilai siswa"></svg>
+                            </div>
+                        </div>
+                    </div>
+
                     <div>
                         <h2 class="text-lg font-bold text-gray-800 mb-4">Daftar Mata Pelajaran</h2>
                         <div id="courses-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div>
@@ -110,9 +207,12 @@ frappe.pages['courses'].on_page_load = function(wrapper) {
         </div>
     `);
 
-    // Inisialisasi awal dengan memuat script student_switcher.js terlebih dahulu
+    // Inisialisasi awal dengan memuat script student_switcher.js dan chart custom
     frappe.require('/assets/bima_lms/js/student_switcher.js', function() {
-        initCoursesPage();
+        frappe.require('/assets/bima_lms/js/course_score_bar_chart.js', function() {
+            console.log('All scripts loaded, initializing courses page');
+            initCoursesPage();
+        });
     });
 };
 
@@ -135,7 +235,10 @@ let isParentUser = false;
 let isAdminUser = false; // Tambahkan flag untuk admin
 
 function initCoursesPage() {
+    console.log('initCoursesPage called');
+    
     window.StudentSwitcher.init(function(activeStudentId) {
+        console.log('StudentSwitcher callback with studentId:', activeStudentId);
         currentStudentId = activeStudentId;
         
         // Cek role user
@@ -144,6 +247,8 @@ function initCoursesPage() {
         isAdminUser = userRoles.includes('Administrator') || 
                       userRoles.includes('System Manager') ||
                       userRoles.includes('Admin');
+        
+        console.log('User roles:', userRoles, 'isParent:', isParentUser, 'isAdmin:', isAdminUser);
         
         // Render Badge Header
         window.StudentSwitcher.renderWidget('#student-switcher-container', function(newStudentId) {
@@ -155,6 +260,14 @@ function initCoursesPage() {
 
         loadAllData(activeStudentId);
     });
+    
+    // Tambahkan ini untuk debug
+    setTimeout(function() {
+        console.log('Checking CourseScoreBarChart after 2s:', window.CourseScoreBarChart);
+        if (window.CourseScoreBarChart) {
+            window.CourseScoreBarChart.debug();
+        }
+    }, 2000);
 }
 
 function loadAllData(studentId) {
@@ -624,11 +737,13 @@ function load_courses_data(studentId, rombelIds, categoryIds) {
                             <p class="text-gray-500 font-medium">${message}</p>
                         </div>
                     `);
+                    
+                    // Still try to load chart even if no courses
+                    loadScoreChart();
                     return;
                 }
 
                 data.courses.forEach(course => {
-                    // Tampilkan badge rombel
                     let rombelBadges = '';
                     if (course.rombel_names && course.rombel_names.length > 0) {
                         rombelBadges = course.rombel_names.slice(0, 2).map(name => 
@@ -679,6 +794,9 @@ function load_courses_data(studentId, rombelIds, categoryIds) {
                     $grid.append($card);
                 });
             }
+
+            // Load chart AFTER courses are rendered
+            loadScoreChart();
         },
         error: function(err) {
             console.error('Error loading courses:', err);
@@ -689,6 +807,50 @@ function load_courses_data(studentId, rombelIds, categoryIds) {
                     <p class="text-red-500 font-medium">Gagal memuat data mata pelajaran. Silakan coba lagi.</p>
                 </div>
             `);
+            
+            // Still try to load chart even on error
+            loadScoreChart();
+        }
+    });
+}
+
+function loadScoreChart() {
+    console.log('loadScoreChart called');
+    
+    // Cek apakah user adalah Parent dan ada studentId
+    let args = {};
+    if (isParentUser && currentStudentId) {
+        args.student_id = currentStudentId;
+        console.log('Parent mode: loading chart for student_id:', currentStudentId);
+    } else {
+        console.log('Admin/Guru mode: loading chart for all students');
+    }
+    
+    // Cek apakah CourseScoreBarChart sudah tersedia
+    if (window.CourseScoreBarChart && typeof window.CourseScoreBarChart.load === 'function') {
+        console.log('CourseScoreBarChart already loaded, calling load()');
+        try {
+            window.CourseScoreBarChart.load(args);
+        } catch (error) {
+            console.error('Error calling CourseScoreBarChart.load():', error);
+        }
+        return;
+    }
+
+    // Jika belum tersedia, coba load script
+    console.log('CourseScoreBarChart not available, loading script...');
+    frappe.require('/assets/bima_lms/js/course_score_bar_chart.js', function() {
+        console.log('Script loaded, checking CourseScoreBarChart...');
+        if (window.CourseScoreBarChart && typeof window.CourseScoreBarChart.load === 'function') {
+            console.log('CourseScoreBarChart loaded successfully, calling load()');
+            try {
+                window.CourseScoreBarChart.load(args);
+            } catch (error) {
+                console.error('Error calling CourseScoreBarChart.load():', error);
+            }
+        } else {
+            console.error('CourseScoreBarChart still not available after loading script');
+            console.log('window.CourseScoreBarChart:', window.CourseScoreBarChart);
         }
     });
 }

@@ -1,0 +1,13 @@
+{
+ "creation": "2026-08-26 16:31:25.850363",
+ "docstatus": 0,
+ "doctype": "Dashboard Chart Source",
+ "idx": 0,
+ "modified": "2026-08-26 16:31:25.850363",
+ "modified_by": "Administrator",
+ "module": "Bima Lms",
+ "name": "Assignment Scores Source",
+ "owner": "Administrator",
+ "source_name": "Assignment Scores Source",
+ "timeseries": 0
+}
