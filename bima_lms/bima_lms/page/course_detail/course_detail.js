@@ -185,6 +185,46 @@ frappe.pages['course-detail'].on_page_load = function(wrapper) {
 
                         </div>
 
+                        <!-- Live Class Card -->
+                        <div id="live-class-card" class="bg-white rounded-xl shadow-sm border border-gray-100 p-4 space-y-4">
+                            <button id="live-class-link" type="button"
+                                    class="inline-flex w-full items-center justify-center space-x-2 px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white text-sm font-semibold rounded-lg shadow-sm transition-colors">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5v10z"></path>
+                                </svg>
+                                <span>Live Classes</span>
+                            </button>
+                            <div class="space-y-2">
+                                <h3 id="live-class-title" class="text-base font-bold text-gray-900"></h3>
+                                <div id="live-class-start-time" class="flex items-center justify-between gap-2 text-xs font-semibold text-rose-600"></div>
+                                <p id="live-class-agenda" class="text-sm text-gray-600 leading-relaxed"></p>
+                            </div>
+                            <div id="edit-live-class-wrapper" class="hidden border-t border-gray-100 pt-3 space-y-3">
+                                <div>
+                                    <label class="block text-xs font-semibold text-gray-500 mb-1">URL Live Class <span class="text-red-500">*</span></label>
+                                    <input type="url" id="edit-live-class-url" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-800 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500" placeholder="https://...">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-semibold text-gray-500 mb-1">Judul Live Class <span class="text-red-500">*</span></label>
+                                    <input type="text" id="edit-live-class-title" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-800 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500" placeholder="Judul live class...">
+                                </div>
+                                <div class="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label class="block text-xs font-semibold text-gray-500 mb-1">Mulai <span class="text-red-500">*</span></label>
+                                        <input type="datetime-local" id="edit-live-class-start-time" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-800 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-semibold text-gray-500 mb-1">Durasi (menit) <span class="text-red-500">*</span></label>
+                                        <input type="number" id="edit-live-class-duration" min="1" step="1" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-800 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500" placeholder="60">
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-semibold text-gray-500 mb-1">Agenda</label>
+                                    <textarea id="edit-live-class-agenda" rows="3" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-800 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500" placeholder="Agenda live class..."></textarea>
+                                </div>
+                            </div>
+                        </div>
+
                         <!-- Container Komponen Information Course -->
                         <div id="information-course-container"></div>
 
@@ -201,6 +241,10 @@ frappe.pages['course-detail'].on_page_load = function(wrapper) {
     $('#btn-cancel-edit').on('click', toggleViewMode);
     $('#btn-save-course').on('click', handleSaveCourse);
     $('#btn-assign-rombel').on('click', openAssignRombelModal);
+    $('#live-class-link').on('click', function() {
+        const url = $(this).data('url');
+        if (url && !$(this).prop('disabled')) window.open(url, '_blank', 'noopener,noreferrer');
+    });
 };
 
 // Global State
@@ -269,6 +313,8 @@ function renderViewMode() {
     $('#view-category').text(data.category_name);
     $('#detail-instructor').text(data.instructor_name);
     $('#view-short-desc').text(data.short_description);
+
+    renderLiveClass(data.live_class);
     
     const formattedDesc = escapeHtml(data.full_description || '').replace(/\n/g, '<br>');
     $('#view-full-desc').html(formattedDesc || '<em class="text-gray-400">Belum ada deskripsi lengkap.</em>');
@@ -286,6 +332,37 @@ function renderViewMode() {
     toggleViewMode();
 }
 
+function renderLiveClass(liveClass) {
+    const $card = $('#live-class-card');
+    const $link = $('#live-class-link');
+    const hasLiveClass = Boolean(liveClass);
+    const expired = hasLiveClass && isLiveClassExpired(liveClass.start_time, liveClass.duration_minutes);
+    const isDisabled = !hasLiveClass || !liveClass.meeting_url || expired;
+
+    $link.data('url', hasLiveClass ? liveClass.meeting_url : '')
+        .prop('disabled', isDisabled)
+        .toggleClass('bg-gray-300 hover:bg-gray-300 cursor-not-allowed', isDisabled)
+        .toggleClass('bg-rose-600 hover:bg-rose-700', !isDisabled);
+    $link.find('span').text(hasLiveClass ? 'Live Classes' : 'Belum Ada Live Classes');
+    $('#live-class-title').text(hasLiveClass ? (liveClass.title || 'Live Class') : '');
+    $('#live-class-start-time').html(hasLiveClass
+        ? `<span>${formatLiveClassStartTime(liveClass.start_time)}</span><span class="inline-flex items-center gap-1 text-gray-500"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"></path><circle cx="12" cy="12" r="9"></circle></svg>${Number(liveClass.duration_minutes) || 0} menit</span>`
+        : '');
+    $('#live-class-agenda').text(hasLiveClass ? (liveClass.agenda || 'Agenda belum tersedia.') : '');
+}
+
+function formatLiveClassStartTime(startTime) {
+    if (!startTime) return 'Waktu mulai belum tersedia';
+
+    const date = new Date(startTime);
+    if (Number.isNaN(date.getTime())) return startTime;
+
+    return `Mulai: ${date.toLocaleString('id-ID', {
+        dateStyle: 'medium',
+        timeStyle: 'short'
+    })}`;
+}
+
 function applyViewerPermissions() {
     const isParent = Boolean(currentCourseData && currentCourseData.is_parent);
     $('#btn-assign-rombel, #btn-enable-edit').toggleClass('hidden', isParent);
@@ -300,6 +377,16 @@ function toggleEditMode() {
     $('#edit-short-desc').val(currentCourseData.short_description);
     $('#edit-full-desc').val(currentCourseData.full_description);
     $('#edit-video-url').val(currentCourseData.embed_video_url);
+
+    if (currentCourseData.is_teacher && !currentCourseData.is_admin) {
+        const liveClass = currentCourseData.live_class || {};
+        $('#edit-live-class-url').val(liveClass.meeting_url || '');
+        $('#edit-live-class-title').val(liveClass.title || '');
+        $('#edit-live-class-start-time').val(formatDatetimeInput(liveClass.start_time));
+        $('#edit-live-class-duration').val(liveClass.duration_minutes || '');
+        $('#edit-live-class-agenda').val(liveClass.agenda || '');
+        $('#edit-live-class-wrapper').removeClass('hidden');
+    }
 
     $('#btn-enable-edit').addClass('hidden');
     $('#edit-mode-actions').removeClass('hidden');
@@ -338,6 +425,7 @@ function toggleViewMode() {
     $('#edit-full-desc-wrapper').addClass('hidden');
 
     $('#edit-video-wrapper').addClass('hidden');
+    $('#edit-live-class-wrapper').addClass('hidden');
 
     // Mengembalikan ke View Mode pada komponen Information Course & Course Section
     if (window.InformationCourseComponent) {
@@ -361,6 +449,16 @@ function openAssignRombelModal() {
             }
         }
     });
+}
+
+function formatDatetimeInput(dateValue) {
+    if (!dateValue) return '';
+
+    const date = new Date(dateValue);
+    if (Number.isNaN(date.getTime())) return '';
+
+    const pad = value => String(value).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 function renderRombelModalDialog(rombels) {
@@ -468,6 +566,14 @@ function handleSaveCourse() {
     const short_desc = $('#edit-short-desc').val().trim();
     const full_desc = $('#edit-full-desc').val().trim();
     const video_url = $('#edit-video-url').val().trim();
+    const liveClassData = currentCourseData.is_teacher && !currentCourseData.is_admin ? {
+        live_class_id: currentCourseData.live_class ? currentCourseData.live_class.live_class_id : null,
+        title: $('#edit-live-class-title').val().trim(),
+        start_time: $('#edit-live-class-start-time').val(),
+        duration_minutes: $('#edit-live-class-duration').val(),
+        meeting_url: $('#edit-live-class-url').val().trim(),
+        agenda: $('#edit-live-class-agenda').val().trim()
+    } : null;
     
     const status = window.InformationCourseComponent 
         ? InformationCourseComponent.getSelectedStatus() 
@@ -493,18 +599,23 @@ function handleSaveCourse() {
     frappe.confirm(
         __('Apakah Anda yakin ingin menyimpan perubahan data course dan daftar bab ini?'),
         function() {
+            const courseUpdateArgs = {
+                course_id: currentCourseData.course_id,
+                course_title: title,
+                category_id: category_id,
+                status: status,
+                short_description: short_desc,
+                full_description: full_desc,
+                embed_video_url: video_url
+            };
+
+            if (liveClassData) {
+                courseUpdateArgs.live_class_data = JSON.stringify(liveClassData);
+            }
 
             frappe.call({
                 method: 'bima_lms.api.courses.update_course_detail',
-                args: {
-                    course_id: currentCourseData.course_id,
-                    course_title: title,
-                    category_id: category_id,
-                    status: status,
-                    short_description: short_desc,
-                    full_description: full_desc,
-                    embed_video_url: video_url
-                },
+                args: courseUpdateArgs,
                 callback: function(r) {
                     if (r.message && r.message.status === 'success') {
                         frappe.show_progress(__('Menyimpan Perubahan...'), 70, 100);
@@ -553,4 +664,12 @@ function escapeHtml(text) {
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#039;");
+}
+
+function isLiveClassExpired(startTime, durationMinutes) {
+    const start = new Date(startTime);
+    const duration = Number(durationMinutes);
+    return Number.isNaN(start.getTime()) || !Number.isFinite(duration)
+        ? false
+        : Date.now() >= start.getTime() + duration * 60 * 1000;
 }

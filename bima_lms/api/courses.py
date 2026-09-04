@@ -34,8 +34,14 @@ def get_current_user_id(conn=None):
     try:
         with conn.cursor() as cursor:
             cursor.execute(
-                "SELECT user_id FROM auth.users WHERE user_email = %s AND is_deleted = false LIMIT 1;", 
-                (current_user_email,)
+                                """
+                                SELECT user_id
+                                FROM auth.users
+                                WHERE LOWER(TRIM(user_email)) = LOWER(TRIM(%s))
+                                    AND COALESCE(is_deleted, false) = false
+                                LIMIT 1;
+                                """,
+                                (current_user_email,)
             )
             pg_user = cursor.fetchone()
             return pg_user[0] if pg_user else None
@@ -193,10 +199,17 @@ def get_course_detail(course_id=None, active_student_id=None):
                 c.published_on,
                 c.last_modified_on,
                 c.total_enrollments,
-                c.total_lessons
+                c.total_lessons,
+                lc.live_class_id,
+                lc.title AS live_class_title,
+                lc.start_time AS live_class_start_time,
+                lc.meeting_url AS live_class_meeting_url,
+                lc.duration_minutes AS live_class_duration_minutes,
+                lc.agenda AS live_class_agenda
             FROM lms.courses c
             LEFT JOIN master.lms_course_categories cat ON c.category_id = cat.category_id
             LEFT JOIN auth.users u ON c.instructor_id = u.user_id
+            LEFT JOIN lms.live_classes lc ON lc.course_id = c.course_id AND lc.is_active = true
             WHERE c.course_id = %s
         """
 
@@ -256,8 +269,18 @@ def get_course_detail(course_id=None, active_student_id=None):
             "last_modified_on": str(row["last_modified_on"]) if row.get("last_modified_on") else "-",
             "total_enrollments": row.get("total_enrollments") or 0,
             "total_lessons": row.get("total_lessons") or 0,
+            "live_class": {
+                "live_class_id": row["live_class_id"],
+                "title": row["live_class_title"] or "",
+                "start_time": str(row["live_class_start_time"]) if row.get("live_class_start_time") else None,
+                "duration_minutes": row["live_class_duration_minutes"] or 0,
+                "meeting_url": row["live_class_meeting_url"] or "",
+                "agenda": row["live_class_agenda"] or ""
+            } if row.get("live_class_id") else None,
             "assigned_rombels": [{"id": r["id"], "name": r["name"]} for r in assigned_rombels],
             "is_parent": is_parent,
+            "is_admin": is_admin,
+            "is_teacher": "LMS Teacher" in user_roles,
             "can_edit": not is_parent,
             "active_student_id": active_student_id if is_parent else None
         }
@@ -798,7 +821,7 @@ def get_course_categories():
 
 # API untuk memperbarui detail course di PostgreSQL
 @frappe.whitelist()
-def update_course_detail(course_id, course_title, category_id, status=None, short_description=None, full_description=None, embed_video_url=None):
+def update_course_detail(course_id, course_title, category_id, status=None, short_description=None, full_description=None, embed_video_url=None, live_class_data=None):
     """Update data course ke PostgreSQL"""
     if not course_id:
         frappe.throw("Course ID tidak ditemukan.")
@@ -813,6 +836,25 @@ def update_course_detail(course_id, course_title, category_id, status=None, shor
         status_value = "DRAFT"
 
     current_user_id = get_current_user_id()
+    if isinstance(live_class_data, str):
+        import json
+        if not live_class_data.strip() or live_class_data.strip().lower() == "null":
+            live_class_data = None
+        else:
+            try:
+                live_class_data = json.loads(live_class_data)
+            except (TypeError, ValueError):
+                frappe.throw("Data Live Classes tidak valid.")
+
+    user_roles = frappe.get_roles(frappe.session.user) or []
+    is_admin = frappe.session.user == "Administrator" or any(
+        role in user_roles for role in ["Administrator", "Admin", "LMS Admin", "System Manager"]
+    )
+    is_teacher = "LMS Teacher" in user_roles and not is_admin
+    if live_class_data and not is_teacher:
+        frappe.throw("Hanya teacher yang dapat mengubah Live Classes.", frappe.PermissionError)
+    if live_class_data and current_user_id is None:
+        frappe.throw("User login tidak ditemukan di auth.users, sehingga host_id Live Classes tidak dapat ditentukan.", frappe.PermissionError)
 
     conn = get_pg_connection()
     try:
@@ -844,6 +886,46 @@ def update_course_detail(course_id, course_title, category_id, status=None, shor
                 current_user_id, 
                 course_id
             ))
+
+            if live_class_data is not None:
+                live_class_id = live_class_data.get("live_class_id")
+                title = (live_class_data.get("title") or "").strip()
+                start_time = live_class_data.get("start_time") or None
+                duration_minutes = int(live_class_data.get("duration_minutes") or 0)
+                meeting_url = (live_class_data.get("meeting_url") or "").strip()
+                agenda = live_class_data.get("agenda") or ""
+
+                if not title or not start_time or not meeting_url or duration_minutes <= 0:
+                    frappe.throw("Judul, URL, waktu mulai, dan durasi Live Classes wajib diisi.")
+
+                if live_class_id:
+                    cur.execute("""
+                        UPDATE lms.live_classes
+                        SET title = %s,
+                            start_time = %s,
+                            duration_minutes = %s,
+                            meeting_url = %s,
+                            agenda = %s,
+                            host_id = %s,
+                            platform_type = '-',
+                            is_active = true
+                        WHERE live_class_id = %s AND course_id = %s
+                    """, (title, start_time, duration_minutes, meeting_url, agenda,
+                          current_user_id, live_class_id, course_id))
+                else:
+                    cur.execute("SELECT pg_advisory_xact_lock(hashtext('lms.live_classes.live_class_id'))")
+                    cur.execute("""
+                        SELECT COALESCE(MAX(live_class_id), 0) + 1
+                        FROM lms.live_classes
+                    """)
+                    new_live_class_id = cur.fetchone()[0]
+                    cur.execute("""
+                        INSERT INTO lms.live_classes
+                            (live_class_id, course_id, host_id, title, start_time, duration_minutes,
+                             platform_type, meeting_url, agenda, is_active, created_on)
+                        VALUES (%s, %s, %s, %s, %s, %s, '-', %s, %s, true, NOW())
+                    """, (new_live_class_id, course_id, current_user_id, title, start_time,
+                          duration_minutes, meeting_url, agenda))
             
         conn.commit()
         return {"status": "success", "message": "Data course berhasil diperbarui."}
