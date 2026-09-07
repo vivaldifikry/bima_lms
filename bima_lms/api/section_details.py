@@ -151,6 +151,30 @@ def get_section_detail(section_id, active_student_id=None):
         """, (section_id,))
         quiz_rows = cursor.fetchall()
 
+        quiz_attempts = {}
+        if is_parent and active_student_id and quiz_rows:
+            quiz_ids = list({row["quiz_id"] for row in quiz_rows})
+            cursor.execute("""
+                SELECT attempt_id, quiz_id, attempt_number, submitted_at,
+                       total_score, result_status
+                FROM lms.quiz_attempts
+                WHERE student_id = ANY(%s)
+                  AND quiz_id = ANY(%s)
+                ORDER BY quiz_id, submitted_at DESC NULLS LAST, attempt_id DESC
+            """, ([int(active_student_id)], quiz_ids))
+            for attempt in cursor.fetchall():
+                summary = quiz_attempts.setdefault(attempt["quiz_id"], {
+                    "attempt_count": 0,
+                    "last_submitted_at": None,
+                    "last_total_score": None,
+                    "last_result_status": None
+                })
+                summary["attempt_count"] += 1
+                if summary["last_submitted_at"] is None:
+                    summary["last_submitted_at"] = as_wib_iso(attempt["submitted_at"])
+                    summary["last_total_score"] = float(attempt["total_score"]) if attempt["total_score"] is not None else None
+                    summary["last_result_status"] = attempt["result_status"]
+
         submissions = {}
         if (is_parent or is_teacher) and assignments:
             cursor.execute("""
@@ -244,7 +268,11 @@ def get_section_detail(section_id, active_student_id=None):
                 "duration_minutes": row["duration_minutes"] or 0,
                 "passing_grade": float(row["passing_grade"]) if row["passing_grade"] is not None else 0,
                 "max_attempts_allowed": row["max_attempts_allowed"] or 0,
-                "questions": []
+                "questions": [],
+                "attempt_count": quiz_attempts.get(row["quiz_id"], {}).get("attempt_count", 0),
+                "last_submitted_at": quiz_attempts.get(row["quiz_id"], {}).get("last_submitted_at"),
+                "last_total_score": quiz_attempts.get(row["quiz_id"], {}).get("last_total_score"),
+                "last_result_status": quiz_attempts.get(row["quiz_id"], {}).get("last_result_status")
             })
             if row["question_id"] is None:
                 continue
@@ -385,6 +413,120 @@ def submit_assignment(assignment_id, file_path, student_id=None):
         conn.rollback()
         frappe.logger("bima_lms").error(f"Error submit_assignment: {str(e)}")
         frappe.throw(f"Gagal mengumpulkan tugas: {str(e)}")
+    finally:
+        conn.close()
+
+
+@frappe.whitelist()
+def submit_quiz_attempt(quiz_id, student_id, answers=None):
+    """Calculate and persist one quiz attempt for the active child account."""
+    if not quiz_id or not student_id:
+        frappe.throw("Quiz dan akun anak wajib diisi.", frappe.MandatoryError)
+
+    try:
+        answers = json.loads(answers) if isinstance(answers, str) else (answers or {})
+        answers = {int(question_id): int(option_id) for question_id, option_id in answers.items() if option_id}
+    except (TypeError, ValueError, json.JSONDecodeError):
+        frappe.throw("Format jawaban quiz tidak valid.", frappe.ValidationError)
+
+    conn = get_pg_connection()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            user_roles = frappe.get_roles(frappe.session.user)
+            if frappe.session.user == "Administrator" or "LMS Parent" not in user_roles:
+                frappe.throw("Hanya orang tua yang dapat mengirimkan quiz.", frappe.PermissionError)
+
+            cur.execute("""
+                SELECT 1
+                FROM auth.parent_student_relations psr
+                JOIN auth.users pu ON pu.user_id = psr.parent_user_id
+                WHERE pu.user_email = %s AND psr.student_user_id = %s
+                LIMIT 1
+            """, (frappe.session.user, student_id))
+            if not cur.fetchone():
+                frappe.throw("Akun anak tidak valid untuk pengguna ini.", frappe.PermissionError)
+
+            cur.execute("""
+                SELECT quiz_id, section_id, passing_grade, max_attempts_allowed
+                FROM lms.quizzes
+                WHERE quiz_id = %s AND is_deleted = false
+                FOR UPDATE
+            """, (quiz_id,))
+            quiz = cur.fetchone()
+            if not quiz:
+                frappe.throw("Quiz tidak ditemukan.", frappe.DoesNotExistError)
+
+            cur.execute("""
+                SELECT COUNT(*) AS attempt_count
+                FROM lms.quiz_attempts
+                WHERE quiz_id = %s AND student_id = %s
+            """, (quiz_id, student_id))
+            attempt_count = int(cur.fetchone()["attempt_count"])
+            max_attempts = int(quiz["max_attempts_allowed"] or 0)
+            if attempt_count >= max_attempts:
+                frappe.throw("Batas maksimal percobaan quiz sudah tercapai.", frappe.PermissionError)
+
+            cur.execute("""
+                SELECT qq.question_id, qq.points_override,
+                       qb.default_points, qo.option_id, qo.is_correct
+                FROM lms.quiz_questions qq
+                JOIN master.lms_question_bank qb ON qb.question_id = qq.question_id
+                    AND qb.is_deleted = false
+                JOIN master.lms_question_options qo ON qo.question_id = qb.question_id
+                WHERE qq.quiz_id = %s
+            """, (quiz_id,))
+            question_rows = cur.fetchall()
+            questions = {}
+            for row in question_rows:
+                question = questions.setdefault(row["question_id"], {
+                    "points": float(row["points_override"] if row["points_override"] is not None else row["default_points"] or 0),
+                    "options": {}
+                })
+                question["options"][row["option_id"]] = bool(row["is_correct"])
+
+            total_score = 0.0
+            answer_rows = []
+            for question_id, question in questions.items():
+                selected_option_id = answers.get(question_id)
+                is_correct = bool(selected_option_id and question["options"].get(selected_option_id, False))
+                points_earned = question["points"] if is_correct else 0.0
+                total_score += points_earned
+                answer_rows.append((question_id, selected_option_id, points_earned, is_correct))
+
+            result_status = "Lulus" if total_score >= float(quiz["passing_grade"] or 0) else "Tidak Lulus"
+            attempt_number = attempt_count + 1
+            cur.execute("""
+                INSERT INTO lms.quiz_attempts
+                    (quiz_id, student_id, attempt_number, started_at, submitted_at,
+                     total_score, result_status)
+                VALUES (%s, %s, %s, NOW() AT TIME ZONE 'Asia/Jakarta',
+                        NOW() AT TIME ZONE 'Asia/Jakarta', %s, %s)
+                RETURNING attempt_id, submitted_at
+            """, (quiz_id, student_id, attempt_number, total_score, result_status))
+            attempt = cur.fetchone()
+
+            for question_id, selected_option_id, points_earned, is_correct in answer_rows:
+                cur.execute("""
+                    INSERT INTO lms.quiz_attempt_answers
+                        (attempt_id, question_id, selected_option_id, essay_answer,
+                         points_earned, is_correct, is_doubtful)
+                    VALUES (%s, %s, %s, '-', %s, %s, false)
+                """, (attempt["attempt_id"], question_id, selected_option_id,
+                      points_earned, is_correct))
+
+        conn.commit()
+        return {
+            "status": "success",
+            "attempt_id": attempt["attempt_id"],
+            "attempt_number": attempt_number,
+            "submitted_at": as_wib_iso(attempt["submitted_at"]),
+            "total_score": total_score,
+            "result_status": result_status
+        }
+    except Exception as e:
+        conn.rollback()
+        frappe.logger("bima_lms").error(f"Error submit_quiz_attempt: {str(e)}")
+        frappe.throw(f"Gagal menyimpan hasil quiz: {str(e)}")
     finally:
         conn.close()
 

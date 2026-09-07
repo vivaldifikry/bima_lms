@@ -105,6 +105,8 @@ function getPageHTML() {
                                 <span id="lesson-count">0 Materi</span>
                                 <span>•</span>
                                 <span id="assignment-count">0 Tugas</span>
+                                <span>•</span>
+                                <span id="quiz-count">0 Quiz</span>
                             </div>
                         </div>
 
@@ -126,7 +128,7 @@ function getPageHTML() {
                             <button type="button" id="tab-btn-lessons" class="tab-nav-btn whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors border-indigo-600 text-indigo-600" data-tab="lessons">
                                 <span class="flex items-center gap-2">
                                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path></svg>
-                                    Daftar Materi
+                                    Materi
                                 </span>
                             </button>
                             <button type="button" id="tab-btn-assignments" class="tab-nav-btn whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300" data-tab="assignments">
@@ -148,7 +150,10 @@ function getPageHTML() {
                     <div id="tab-content-lessons" class="tab-pane space-y-4">
                         <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 space-y-4">
                             <div class="flex items-center justify-between border-b border-gray-100 pb-4">
-                                <h2 class="text-lg font-bold text-gray-900">Daftar Materi</h2>
+                                <div>
+                                    <h2 class="text-lg font-bold text-gray-900">Daftar Materi</h2>
+                                    <p class="mt-1 text-sm text-gray-500">Pilih materi untuk melihat dan mempelajari konten.</p>
+                                </div>
                                 <button id="btn-add-lesson" type="button" class="hidden inline-flex items-center space-x-1 px-3 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 text-xs font-semibold rounded-lg transition-colors">
                                     <span>+ Tambah Materi</span>
                                 </button>
@@ -164,7 +169,10 @@ function getPageHTML() {
                     <div id="tab-content-assignments" class="tab-pane hidden space-y-4">
                         <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 space-y-4">
                             <div class="flex items-center justify-between border-b border-gray-100 pb-4">
-                                <h2 class="text-lg font-bold text-gray-900">Daftar Tugas</h2>
+                                <div>
+                                    <h2 class="text-lg font-bold text-gray-900">Daftar Tugas</h2>
+                                    <p class="mt-1 text-sm text-gray-500">Pilih tugas untuk mengerjakan soal.</p>
+                                </div>
                                 <button id="btn-add-assignment" type="button" class="hidden inline-flex items-center space-x-1 px-3 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 text-xs font-semibold rounded-lg transition-colors">
                                     <span>+ Tambah Tugas</span>
                                 </button>
@@ -620,14 +628,30 @@ function renderQuizzesList() {
     const $container = $('#quizzes-list').empty();
     $('#empty-quizzes-msg').toggleClass('hidden', quizzes.length !== 0);
 
-    quizzes.forEach((quiz, index) => $container.append(`
-        <div class="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+    quizzes.forEach((quiz, index) => {
+        const attempts = Number(quiz.attempt_count || 0);
+        const maxAttempts = Number(quiz.max_attempts_allowed || 0);
+        const isParent = Boolean(currentSectionData.is_parent && currentSectionData.active_student_id);
+        const attemptsExhausted = isParent && attempts >= maxAttempts;
+        
+        const lastAttempt = quiz.last_submitted_at ? `<p class="mt-1 text-xs text-gray-500"> Submit terakhir: ${formatSubmissionDate(quiz.last_submitted_at)}
+            <br>
+            Nilai: <span class="text-base font-bold text-gray-700">${quiz.last_total_score ?? '-'}</span>
+            • ${escapeHtml(quiz.last_result_status || '-')} </p>` : '';
+
+        const attemptInfo = isParent ? `<p class="mt-1 text-xs font-semibold ${attemptsExhausted ? 'text-red-600' : 'text-gray-600'}">${attempts}/${maxAttempts} percobaan</p>${lastAttempt}` : '';
+        $container.append(`
+        <div class="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-gray-200 bg-white px-5 py-4 shadow-sm">
             <div>
-                <h3 class="font-bold text-gray-900">${escapeHtml(quiz.quiz_title)}</h3>
+                <h3 class="text-lg font-bold text-gray-900">${escapeHtml(quiz.quiz_title)}</h3>
                 <p class="mt-1 text-sm text-gray-500">${quiz.questions.length} soal • ${quiz.duration_minutes ? `${quiz.duration_minutes} menit` : 'Tanpa batas waktu'} • Nilai lulus: ${quiz.passing_grade}</p>
             </div>
-            <button type="button" class="btn-open-quiz rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700" data-quiz-index="${index}">Buka Quiz</button>
-        </div>`));
+            <div class="flex w-full flex-wrap items-center justify-end gap-4 sm:w-auto">
+                ${isParent ? `<div class="text-right">${attemptInfo}</div>` : ''}
+                <button type="button" class="btn-open-quiz rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50" data-quiz-index="${index}" ${attemptsExhausted ? 'disabled' : ''}>Buka Quiz</button>
+            </div>
+        </div>`);
+    });
 }
 
 function openQuiz(index) {
@@ -636,6 +660,22 @@ function openQuiz(index) {
         frappe.msgprint(__('Quiz ini belum memiliki soal.'));
         return;
     }
+    const attempts = Number(quiz.attempt_count || 0);
+    const maxAttempts = Number(quiz.max_attempts_allowed || 0);
+    if (currentSectionData.is_parent && attempts >= maxAttempts) {
+        frappe.msgprint(__('Batas maksimal percobaan quiz sudah tercapai.'));
+        return;
+    }
+    if (currentSectionData.is_parent && quiz.last_result_status === 'Lulus') {
+        frappe.confirm(__('Anda sudah lulus quiz ini. Jika mengerjakan dan submit ulang, nilai terbaru akan menjadi nilai yang digunakan. Lanjutkan?'), function() {
+            startQuiz(quiz);
+        });
+        return;
+    }
+    startQuiz(quiz);
+}
+
+function startQuiz(quiz) {
     activeQuiz = quiz;
     quizCanAnswer = Boolean(currentSectionData.is_parent && currentSectionData.active_student_id);
     quizResultVisible = false;
@@ -681,6 +721,7 @@ function renderQuizQuestion() {
 }
 
 function closeQuizModal() {
+    const shouldReload = quizResultVisible;
     activeQuiz = null;
     quizCanAnswer = false;
     quizResultVisible = false;
@@ -690,6 +731,7 @@ function closeQuizModal() {
     $('#btn-quiz-close').addClass('hidden');
     $('#quiz-question-buttons').empty();
     history.replaceState(null, '', window.location.href);
+    if (shouldReload) loadSectionDetail(currentSectionId);
 }
 
 function updateQuizTimer() {
@@ -717,19 +759,37 @@ function updateQuizTimer() {
 
 function submitQuizLocally(timeExpired) {
     if (!activeQuiz) return;
-    const totalPoints = activeQuiz.questions.reduce((sum, question) => sum + Number(question.points || 0), 0);
-    const earnedPoints = activeQuiz.questions.reduce((sum, question, index) => {
-        const selected = question.options.find(option => option.option_id === activeQuizAnswers[index]);
-        return sum + (selected && selected.is_correct ? Number(question.points || 0) : 0);
-    }, 0);
-    const score = totalPoints ? (earnedPoints / totalPoints) * 100 : 0;
-    const passed = score >= Number(activeQuiz.passing_grade || 0);
+    const answers = {};
+    activeQuiz.questions.forEach((question, index) => {
+        if (activeQuizAnswers[index] !== undefined) answers[question.question_id] = activeQuizAnswers[index];
+    });
+    const quizId = activeQuiz.quiz_id;
+    const studentId = currentSectionData.active_student_id;
+    frappe.call({
+        method: 'bima_lms.api.section_details.submit_quiz_attempt',
+        args: {
+            quiz_id: quizId,
+            student_id: studentId,
+            answers: JSON.stringify(answers)
+        },
+        freeze: true,
+        freeze_message: __('Menyimpan hasil quiz...'),
+        callback: function(response) {
+            if (!response.message || response.message.status !== 'success') return;
+            renderQuizResult(response.message, timeExpired);
+        }
+    });
+}
+
+function renderQuizResult(result, timeExpired) {
+    const score = Number(result.total_score || 0);
+    const passed = result.result_status === 'Lulus';
     $('#quiz-question-view').addClass('lg:col-span-2 flex items-center justify-center');
     $('#quiz-question-view').html(`<div class="w-full max-w-xl text-center">
         <p class="text-sm font-bold text-gray-600">${timeExpired ? 'Waktu pengerjaan habis.' : 'Quiz selesai.'}</p>
         <p class="mt-3 text-5xl font-extrabold text-gray-900">${score.toFixed(2)}</p>
         <p class="mx-auto mt-5 w-fit rounded-lg px-5 py-3 text-lg font-extrabold text-white ${passed ? 'bg-emerald-600' : 'bg-red-600'}">${passed ? 'Lulus' : 'Belum lulus'}</p>
-        <p class="mt-3 text-sm text-gray-700">Nilai lulus: ${activeQuiz.passing_grade}</p>
+        <p class="mt-3 text-sm text-gray-700">Percobaan ke-${result.attempt_number} • Nilai lulus: ${activeQuiz.passing_grade}</p>
     </div>`);
     $('#quiz-modal-meta').text('Hasil kalkulasi lokal, belum disimpan ke server.');
     $('#quiz-question-nav').addClass('hidden');
@@ -785,6 +845,7 @@ function renderPage() {
     $('#section-description').text(data.description || 'Tidak ada deskripsi.');
     $('#lesson-count').text(`${data.lessons ? data.lessons.length : 0} Materi`);
     $('#assignment-count').text(`${data.assignments ? data.assignments.length : 0} Tugas`);
+    $('#quiz-count').text(`${data.quizzes ? data.quizzes.length : 0} Quiz`);
     renderQuizzesList();
     $('#breadcrumb-section').text(data.section_title);
 

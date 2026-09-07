@@ -4,3 +4,4 @@
 
 [post_model_sync]
 # Patches added in this section will be executed after doctypes are migrated
+bima_lms.patches.fix_quiz_attempt_student_fk
