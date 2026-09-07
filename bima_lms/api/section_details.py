@@ -37,9 +37,7 @@ def get_section_detail(section_id, active_student_id=None):
         is_parent = not is_builtin_admin and "LMS Parent" in user_roles
         is_teacher = not is_builtin_admin and "LMS Teacher" in user_roles
 
-        if is_parent:
-            if not active_student_id:
-                frappe.throw("Silakan pilih akun anak terlebih dahulu.", frappe.PermissionError)
+        if is_parent and active_student_id:
             cursor.execute("""
                 SELECT 1
                 FROM auth.parent_student_relations psr
@@ -63,13 +61,13 @@ def get_section_detail(section_id, active_student_id=None):
             LEFT JOIN lms.courses c ON s.course_id = c.course_id
             WHERE s.section_id = %s 
             AND s.is_deleted = false
-            AND (%s = false OR EXISTS (
+            AND (%s = false OR %s IS NULL OR EXISTS (
                 SELECT 1
                 FROM lms.course_rombels cr_parent
                 JOIN master.rombel_students rs_parent ON rs_parent.rombel_id = cr_parent.rombels_id
                 WHERE cr_parent.course_id = s.course_id AND rs_parent.student_id = %s
             ))
-        """, (section_id, is_parent, active_student_id))
+        """, (section_id, is_parent, active_student_id, active_student_id))
         
         section = cursor.fetchone()
         
@@ -123,6 +121,36 @@ def get_section_detail(section_id, active_student_id=None):
 
         assignments = cursor.fetchall()
 
+        # Get quizzes, questions, and options for this section.
+        cursor.execute("""
+            SELECT
+                q.quiz_id,
+                q.quiz_title,
+                q.duration_minutes,
+                q.passing_grade,
+                q.max_attempts_allowed,
+                qq.quiz_question_id,
+                qq.question_id,
+                qq.display_order,
+                qq.points_override,
+                qb.question_text,
+                qb.question_type,
+                qb.default_points,
+                qo.option_id,
+                qo.option_text,
+                qo.is_correct
+            FROM lms.quizzes q
+            LEFT JOIN lms.quiz_questions qq ON qq.quiz_id = q.quiz_id
+            LEFT JOIN master.lms_question_bank qb ON qb.question_id = qq.question_id
+                AND qb.is_deleted = false
+            LEFT JOIN master.lms_question_options qo ON qo.question_id = qb.question_id
+            WHERE q.section_id = %s
+              AND q.is_deleted = false
+            ORDER BY q.quiz_id, qq.display_order ASC, qq.quiz_question_id ASC,
+                     qo.option_id ASC
+        """, (section_id,))
+        quiz_rows = cursor.fetchall()
+
         submissions = {}
         if (is_parent or is_teacher) and assignments:
             cursor.execute("""
@@ -154,6 +182,7 @@ def get_section_detail(section_id, active_student_id=None):
             "display_order": section["display_order"],
             "lessons": [],
             "assignments": [],
+            "quizzes": [],
             "is_parent": is_parent,
             "is_teacher": is_teacher,
             "active_student_id": active_student_id if is_parent else None
@@ -206,6 +235,43 @@ def get_section_detail(section_id, active_student_id=None):
                     for submission in (submissions.get(assignment["assignment_id"]) or [])
                 ] if is_teacher else []
             })
+
+        quizzes_by_id = {}
+        for row in quiz_rows:
+            quiz = quizzes_by_id.setdefault(row["quiz_id"], {
+                "quiz_id": row["quiz_id"],
+                "quiz_title": row["quiz_title"] or "Quiz Tanpa Judul",
+                "duration_minutes": row["duration_minutes"] or 0,
+                "passing_grade": float(row["passing_grade"]) if row["passing_grade"] is not None else 0,
+                "max_attempts_allowed": row["max_attempts_allowed"] or 0,
+                "questions": []
+            })
+            if row["question_id"] is None:
+                continue
+
+            question = next(
+                (item for item in quiz["questions"] if item["question_id"] == row["question_id"]),
+                None
+            )
+            if not question:
+                question = {
+                    "quiz_question_id": row["quiz_question_id"],
+                    "question_id": row["question_id"],
+                    "question_text": row["question_text"] or "",
+                    "question_type": row["question_type"] or "multiple_choice",
+                    "points": float(row["points_override"] if row["points_override"] is not None else row["default_points"] or 0),
+                    "options": []
+                }
+                quiz["questions"].append(question)
+
+            if row["option_id"] is not None:
+                question["options"].append({
+                    "option_id": row["option_id"],
+                    "option_text": row["option_text"] or "",
+                    "is_correct": bool(row["is_correct"])
+                })
+
+        result["quizzes"] = list(quizzes_by_id.values())
 
         return result
 

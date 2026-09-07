@@ -135,6 +135,12 @@ function getPageHTML() {
                                     Tugas
                                 </span>
                             </button>
+                            <button type="button" id="tab-btn-quizzes" class="tab-nav-btn whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300" data-tab="quizzes">
+                                <span class="flex items-center gap-2">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2m-1 0a2 2 0 11-4 0m1 4h4m-4 4h4m-4 4h2"></path></svg>
+                                    Quiz
+                                </span>
+                            </button>
                         </nav>
                     </div>
 
@@ -170,6 +176,51 @@ function getPageHTML() {
                         </div>
                     </div>
 
+                    <!-- Tab Content: Quizzes -->
+                    <div id="tab-content-quizzes" class="tab-pane hidden space-y-4">
+                        <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 space-y-4">
+                            <div class="border-b border-gray-100 pb-4">
+                                <h2 class="text-lg font-bold text-gray-900">Daftar Quiz</h2>
+                                <p class="text-sm text-gray-500 mt-1">Pilih quiz untuk melihat dan mengerjakan soal.</p>
+                            </div>
+                            <div id="quizzes-list" class="space-y-3"></div>
+                            <div id="empty-quizzes-msg" class="hidden text-center py-8 bg-gray-50 rounded-lg border border-dashed border-gray-200">
+                                <p class="text-xs text-gray-500 font-medium">Belum ada quiz pada bab ini.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+
+                <div id="quiz-modal" class="hidden fixed inset-0 z-[100] bg-gray-900/70 p-4 sm:p-8" role="dialog" aria-modal="true" aria-labelledby="quiz-modal-title">
+                    <div class="mx-auto flex h-full max-w-5xl items-center justify-center">
+                        <div class="flex h-[min(760px,calc(100vh-2rem))] w-full flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
+                            <div class="border-b border-gray-200 px-6 py-5">
+                                <div class="flex items-center justify-between gap-4">
+                                    <div><h2 id="quiz-modal-title" class="text-xl font-bold text-gray-900"></h2><p id="quiz-modal-meta" class="mt-1 text-sm text-gray-500"></p></div>
+                                    <span id="quiz-timer" class="rounded-lg bg-indigo-50 px-3 py-2 text-sm font-bold text-indigo-700"></span>
+                                </div>
+                                <div class="mt-4 h-2 overflow-hidden rounded-full bg-gray-100"><div id="quiz-progress" class="h-full bg-indigo-600 transition-all"></div></div>
+                            </div>
+                            <div class="min-h-0 flex-1 grid grid-cols-1 gap-6 overflow-hidden px-6 py-8 lg:grid-cols-[220px_minmax(0,1fr)]">
+                                <aside id="quiz-question-nav" class="order-2 min-h-0 overflow-y-auto rounded-xl border border-gray-200 bg-gray-50 p-4 lg:order-1">
+                                    <h3 class="text-sm font-bold text-gray-800">Navigasi Soal</h3>
+                                    <div id="quiz-question-buttons" class="mt-3 grid grid-cols-5 gap-2 pr-1"></div>
+                                </aside>
+                                <div id="quiz-question-view" class="order-1 min-h-0 overflow-y-auto px-0 lg:order-2"></div>
+                            </div>
+                            <div class="flex items-center justify-between border-t border-gray-200 px-6 py-4">
+                                <div id="quiz-footer-left">
+                                    <button id="btn-quiz-previous" type="button" class="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Sebelumnya</button>
+                                </div>
+                                <div id="quiz-footer-right" class="flex items-center gap-2">
+                                    <button id="btn-quiz-next" type="button" class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700">Berikutnya</button>
+                                    <button id="btn-quiz-submit" type="button" class="hidden rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">Submit Quiz</button>
+                                    <button id="btn-quiz-close" type="button" class="hidden rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700">Tutup</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
             </div>
@@ -185,6 +236,13 @@ let activeTab = 'lessons';
 let quillInstances = {};
 let deletedLessonIds = [];
 let deletedAssignmentIds = [];
+let activeQuiz = null;
+let activeQuizQuestionIndex = 0;
+let activeQuizAnswers = {};
+let quizTimer = null;
+let quizDeadline = null;
+let quizCanAnswer = false;
+let quizResultVisible = false;
 
 function initSectionPage() {
     console.log('[LMS Debug] initSectionPage called');
@@ -243,6 +301,40 @@ function bindGlobalEvents() {
         e.preventDefault();
         const tab = $(this).data('tab');
         switchTab(tab);
+    });
+
+    $(document).off('click', '.btn-open-quiz').on('click', '.btn-open-quiz', function() {
+        openQuiz(Number($(this).data('quiz-index')));
+    });
+
+    $(document).off('change', '.quiz-option-input').on('change', '.quiz-option-input', function() {
+        activeQuizAnswers[activeQuizQuestionIndex] = Number($(this).val());
+        renderQuizQuestion();
+    });
+
+    $(document).off('click', '#btn-quiz-previous').on('click', '#btn-quiz-previous', function() {
+        if (activeQuizQuestionIndex > 0) {
+            activeQuizQuestionIndex--;
+            renderQuizQuestion();
+        }
+    });
+
+    $(document).off('click', '#btn-quiz-next').on('click', '#btn-quiz-next', function() {
+        if (activeQuizQuestionIndex < activeQuiz.questions.length - 1) {
+            activeQuizQuestionIndex++;
+            renderQuizQuestion();
+        }
+    });
+
+    $(document).off('click', '#btn-quiz-submit').on('click', '#btn-quiz-submit', function() {
+        frappe.confirm(__('Apakah Anda yakin ingin submit quiz ini? Setelah submit, jawaban tidak dapat diubah.'), function() {
+            submitQuizLocally(false);
+        });
+    });
+    $(document).off('click', '#btn-quiz-close').on('click', '#btn-quiz-close', closeQuizModal);
+    $(document).off('click', '.btn-quiz-question').on('click', '.btn-quiz-question', function() {
+        activeQuizQuestionIndex = Number($(this).data('question-index'));
+        renderQuizQuestion();
     });
 
     // Edit Mode Action Handlers
@@ -467,6 +559,17 @@ function bindGlobalEvents() {
             }
         });
     });
+
+    if (!window.__sectionQuizPopstateBound) {
+        window.addEventListener('popstate', handleQuizForcedExit);
+        window.addEventListener('beforeunload', function(event) {
+            if (activeQuiz && !quizResultVisible) {
+                event.preventDefault();
+                event.returnValue = '';
+            }
+        });
+        window.__sectionQuizPopstateBound = true;
+    }
 }
 
 function swapArrayElements(arr, i, j) {
@@ -512,6 +615,139 @@ function switchTab(tabName) {
     $(`#tab-content-${tabName}`).removeClass('hidden');
 }
 
+function renderQuizzesList() {
+    const quizzes = currentSectionData.quizzes || [];
+    const $container = $('#quizzes-list').empty();
+    $('#empty-quizzes-msg').toggleClass('hidden', quizzes.length !== 0);
+
+    quizzes.forEach((quiz, index) => $container.append(`
+        <div class="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+            <div>
+                <h3 class="font-bold text-gray-900">${escapeHtml(quiz.quiz_title)}</h3>
+                <p class="mt-1 text-sm text-gray-500">${quiz.questions.length} soal • ${quiz.duration_minutes ? `${quiz.duration_minutes} menit` : 'Tanpa batas waktu'} • Nilai lulus: ${quiz.passing_grade}</p>
+            </div>
+            <button type="button" class="btn-open-quiz rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700" data-quiz-index="${index}">Buka Quiz</button>
+        </div>`));
+}
+
+function openQuiz(index) {
+    const quiz = (currentSectionData.quizzes || [])[index];
+    if (!quiz || !quiz.questions.length) {
+        frappe.msgprint(__('Quiz ini belum memiliki soal.'));
+        return;
+    }
+    activeQuiz = quiz;
+    quizCanAnswer = Boolean(currentSectionData.is_parent && currentSectionData.active_student_id);
+    quizResultVisible = false;
+    activeQuizQuestionIndex = 0;
+    activeQuizAnswers = {};
+    quizDeadline = quizCanAnswer && quiz.duration_minutes ? Date.now() + quiz.duration_minutes * 60000 : null;
+    $('#btn-quiz-previous, #btn-quiz-next').removeClass('hidden');
+    $('#btn-quiz-submit, #btn-quiz-close').addClass('hidden');
+    $('#btn-quiz-previous').prop('disabled', false).removeClass('opacity-50');
+    $('#quiz-modal').removeClass('hidden');
+    $('#quiz-question-nav').removeClass('hidden');
+    history.pushState({ sectionQuiz: true }, '', window.location.href);
+    if (quizTimer) clearInterval(quizTimer);
+    quizTimer = quizDeadline ? setInterval(updateQuizTimer, 1000) : null;
+    updateQuizTimer();
+    renderQuizQuestion();
+}
+
+function renderQuizQuestion() {
+    if (!activeQuiz) return;
+    const question = activeQuiz.questions[activeQuizQuestionIndex];
+    const selected = activeQuizAnswers[activeQuizQuestionIndex];
+    $('#quiz-question-view').removeClass('lg:col-span-2 flex items-center justify-center');
+    $('#quiz-modal-title').text(activeQuiz.quiz_title);
+    $('#quiz-modal-meta').text(`Soal ${activeQuizQuestionIndex + 1} dari ${activeQuiz.questions.length}`);
+    $('#quiz-progress').css('width', `${((activeQuizQuestionIndex + 1) / activeQuiz.questions.length) * 100}%`);
+    $('#quiz-question-view').html(`
+        <h3 class="text-lg font-semibold leading-relaxed text-gray-900">${activeQuizQuestionIndex + 1}. ${escapeHtml(question.question_text)}</h3>
+        <div class="mt-6 space-y-3">${question.options.map(option => `
+            <label class="flex items-start gap-3 rounded-lg border p-4 ${quizCanAnswer ? 'cursor-pointer hover:border-indigo-400' : ''} ${!quizCanAnswer && option.is_correct ? 'border-emerald-300 bg-emerald-100' : selected === option.option_id ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200'}">
+                <input type="radio" class="quiz-option-input mt-1" name="quiz-option" value="${option.option_id}" ${selected === option.option_id ? 'checked' : ''} ${quizCanAnswer ? '' : 'disabled'}>
+                <span class="text-sm ${!quizCanAnswer && option.is_correct ? 'font-semibold text-emerald-800' : 'text-gray-700'}">${escapeHtml(option.option_text)}</span>
+            </label>`).join('')}</div>`);
+        $('#quiz-question-buttons').html(activeQuiz.questions.map((item, index) => {
+            const answered = activeQuizAnswers[index] !== undefined;
+            const current = index === activeQuizQuestionIndex;
+            return `<button type="button" class="btn-quiz-question rounded-lg border px-2 py-2 text-xs font-bold ${current ? 'border-indigo-600 bg-indigo-600 text-white' : answered ? 'border-orange-400 bg-orange-400 text-white' : 'border-gray-300 bg-white text-gray-700 hover:border-indigo-400'}" data-question-index="${index}" aria-label="Soal ${index + 1}">${index + 1}</button>`;
+        }).join(''));
+    $('#btn-quiz-close').toggleClass('hidden', quizCanAnswer);
+    $('#btn-quiz-previous').removeClass('hidden').prop('disabled', activeQuizQuestionIndex === 0).toggleClass('opacity-50', activeQuizQuestionIndex === 0);
+    $('#btn-quiz-next').toggleClass('hidden', activeQuizQuestionIndex === activeQuiz.questions.length - 1);
+    $('#btn-quiz-submit').toggleClass('hidden', !quizCanAnswer || activeQuizQuestionIndex !== activeQuiz.questions.length - 1);
+}
+
+function closeQuizModal() {
+    activeQuiz = null;
+    quizCanAnswer = false;
+    quizResultVisible = false;
+    if (quizTimer) clearInterval(quizTimer);
+    quizTimer = null;
+    $('#quiz-modal').addClass('hidden');
+    $('#btn-quiz-close').addClass('hidden');
+    $('#quiz-question-buttons').empty();
+    history.replaceState(null, '', window.location.href);
+}
+
+function updateQuizTimer() {
+    if (!activeQuiz) return;
+    if (!quizCanAnswer) {
+        $('#quiz-timer').html(`<span class="inline-flex items-center gap-1.5"><svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 2m6-2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>${activeQuiz.duration_minutes ? `${activeQuiz.duration_minutes} menit` : 'Tanpa batas waktu'}</span>`);
+        return;
+    }
+    if (!quizDeadline) {
+        $('#quiz-timer').html(`<span class="inline-flex items-center gap-1.5"><svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 2m6-2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>Tanpa batas waktu</span>`);
+        return;
+    }
+    const seconds = Math.max(0, Math.ceil((quizDeadline - Date.now()) / 1000));
+    const minutes = Math.floor(seconds / 60);
+    $('#quiz-timer').text(`${minutes}:${String(seconds % 60).padStart(2, '0')}`);
+    if ([600, 300, 120].includes(seconds)) {
+        frappe.show_alert({ message: __('Sisa waktu quiz: {0}', [`${Math.ceil(seconds / 60)} menit`]), indicator: 'orange' });
+    }
+    if (!seconds) {
+        clearInterval(quizTimer);
+        quizTimer = null;
+        submitQuizLocally(true);
+    }
+}
+
+function submitQuizLocally(timeExpired) {
+    if (!activeQuiz) return;
+    const totalPoints = activeQuiz.questions.reduce((sum, question) => sum + Number(question.points || 0), 0);
+    const earnedPoints = activeQuiz.questions.reduce((sum, question, index) => {
+        const selected = question.options.find(option => option.option_id === activeQuizAnswers[index]);
+        return sum + (selected && selected.is_correct ? Number(question.points || 0) : 0);
+    }, 0);
+    const score = totalPoints ? (earnedPoints / totalPoints) * 100 : 0;
+    const passed = score >= Number(activeQuiz.passing_grade || 0);
+    $('#quiz-question-view').addClass('lg:col-span-2 flex items-center justify-center');
+    $('#quiz-question-view').html(`<div class="w-full max-w-xl text-center">
+        <p class="text-sm font-bold text-gray-600">${timeExpired ? 'Waktu pengerjaan habis.' : 'Quiz selesai.'}</p>
+        <p class="mt-3 text-5xl font-extrabold text-gray-900">${score.toFixed(2)}</p>
+        <p class="mx-auto mt-5 w-fit rounded-lg px-5 py-3 text-lg font-extrabold text-white ${passed ? 'bg-emerald-600' : 'bg-red-600'}">${passed ? 'Lulus' : 'Belum lulus'}</p>
+        <p class="mt-3 text-sm text-gray-700">Nilai lulus: ${activeQuiz.passing_grade}</p>
+    </div>`);
+    $('#quiz-modal-meta').text('Hasil kalkulasi lokal, belum disimpan ke server.');
+    $('#quiz-question-nav').addClass('hidden');
+    $('#btn-quiz-previous, #btn-quiz-next, #btn-quiz-submit').addClass('hidden');
+    $('#btn-quiz-close').removeClass('hidden');
+    quizResultVisible = true;
+    if (quizTimer) clearInterval(quizTimer);
+    quizTimer = null;
+    history.replaceState(null, '', window.location.href);
+}
+
+function handleQuizForcedExit(event) {
+    if (!activeQuiz || !quizCanAnswer || quizResultVisible) return;
+    event.preventDefault();
+    history.pushState({ sectionQuiz: true }, '', window.location.href);
+    frappe.msgprint(__('Quiz belum disubmit. Jika keluar paksa, hasil quiz dianggap 0 dan tercatat sebagai keluar tanpa menyelesaikan quiz.'));
+}
+
 function loadSectionDetail(section_id) {
     console.log('[LMS Debug] Loading section detail for ID:', section_id);
     $('#section-loading').removeClass('hidden');
@@ -549,6 +785,7 @@ function renderPage() {
     $('#section-description').text(data.description || 'Tidak ada deskripsi.');
     $('#lesson-count').text(`${data.lessons ? data.lessons.length : 0} Materi`);
     $('#assignment-count').text(`${data.assignments ? data.assignments.length : 0} Tugas`);
+    renderQuizzesList();
     $('#breadcrumb-section').text(data.section_title);
 
     if (isEditMode) {
