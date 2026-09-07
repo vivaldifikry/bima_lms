@@ -188,8 +188,15 @@ function getPageHTML() {
                     <div id="tab-content-quizzes" class="tab-pane hidden space-y-4">
                         <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 space-y-4">
                             <div class="border-b border-gray-100 pb-4">
-                                <h2 class="text-lg font-bold text-gray-900">Daftar Quiz</h2>
-                                <p class="text-sm text-gray-500 mt-1">Pilih quiz untuk melihat dan mengerjakan soal.</p>
+                                <div class="flex items-center justify-between gap-4">
+                                    <div>
+                                        <h2 class="text-lg font-bold text-gray-900">Daftar Quiz</h2>
+                                        <p class="text-sm text-gray-500 mt-1">Pilih quiz untuk melihat dan mengerjakan soal.</p>
+                                    </div>
+                                    <button id="btn-add-quiz" type="button" class="hidden inline-flex items-center space-x-1 px-3 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 text-xs font-semibold rounded-lg transition-colors">
+                                        <span>+ Tambah Quiz</span>
+                                    </button>
+                                </div>
                             </div>
                             <div id="quizzes-list" class="space-y-3"></div>
                             <div id="empty-quizzes-msg" class="hidden text-center py-8 bg-gray-50 rounded-lg border border-dashed border-gray-200">
@@ -244,6 +251,7 @@ let activeTab = 'lessons';
 let quillInstances = {};
 let deletedLessonIds = [];
 let deletedAssignmentIds = [];
+let deletedQuizIds = [];
 let activeQuiz = null;
 let activeQuizQuestionIndex = 0;
 let activeQuizAnswers = {};
@@ -420,6 +428,26 @@ function bindGlobalEvents() {
         }
     });
 
+    $(document).off('click', '.btn-move-quiz-up').on('click', '.btn-move-quiz-up', function() {
+        const idx = Number($(this).closest('.quiz-edit-card').data('quiz-index'));
+        if (idx > 0) {
+            animateListSwap($(this).closest('.quiz-edit-card'), idx, idx - 1, '.quiz-edit-card', function() {
+                swapArrayElements(currentSectionData.quizzes, idx, idx - 1);
+                renderQuizzesList();
+            });
+        }
+    });
+
+    $(document).off('click', '.btn-move-quiz-down').on('click', '.btn-move-quiz-down', function() {
+        const idx = Number($(this).closest('.quiz-edit-card').data('quiz-index'));
+        if (idx < currentSectionData.quizzes.length - 1) {
+            animateListSwap($(this).closest('.quiz-edit-card'), idx, idx + 1, '.quiz-edit-card', function() {
+                swapArrayElements(currentSectionData.quizzes, idx, idx + 1);
+                renderQuizzesList();
+            });
+        }
+    });
+
     // Lesson Edit Controls
     $(document).off('click', '#btn-add-lesson').on('click', '#btn-add-lesson', function() {
         currentSectionData.lessons = currentSectionData.lessons || [];
@@ -466,6 +494,47 @@ function bindGlobalEvents() {
             currentSectionData.assignments.splice(index, 1);
             renderAssignmentsList();
         });
+    });
+
+    $(document).off('click', '#btn-add-quiz').on('click', '#btn-add-quiz', function() {
+        currentSectionData.quizzes = currentSectionData.quizzes || [];
+        currentSectionData.quizzes.push({
+            quiz_id: null,
+            quiz_title: 'Quiz Baru',
+            duration_minutes: 1,
+            passing_grade: 1,
+            max_attempts_allowed: 1,
+            questions: [],
+            attempt_count: 0
+        });
+        renderQuizzesList();
+    });
+
+    $(document).off('click', '.btn-delete-quiz').on('click', '.btn-delete-quiz', function() {
+        const index = Number($(this).closest('.quiz-edit-card').data('quiz-index'));
+        const quiz = currentSectionData.quizzes[index];
+        frappe.confirm(__('Apakah Anda yakin ingin menghapus quiz "{0}"?', [quiz.quiz_title || __('Quiz ini')]), function() {
+            if (quiz.quiz_id) deletedQuizIds.push(quiz.quiz_id);
+            currentSectionData.quizzes.splice(index, 1);
+            renderQuizzesList();
+        });
+    });
+
+    $(document).off('input', '.input-quiz-title').on('input', '.input-quiz-title', function() {
+        const quiz = currentSectionData.quizzes[Number($(this).closest('.quiz-edit-card').data('quiz-index'))];
+        quiz.quiz_title = $(this).val();
+    });
+    $(document).off('input', '.input-quiz-duration').on('input', '.input-quiz-duration', function() {
+        const quiz = currentSectionData.quizzes[Number($(this).closest('.quiz-edit-card').data('quiz-index'))];
+        quiz.duration_minutes = Math.max(1, Number($(this).val()) || 1);
+    });
+    $(document).off('input', '.input-quiz-passing-grade').on('input', '.input-quiz-passing-grade', function() {
+        const quiz = currentSectionData.quizzes[Number($(this).closest('.quiz-edit-card').data('quiz-index'))];
+        quiz.passing_grade = Math.max(1, Number($(this).val()) || 1);
+    });
+    $(document).off('input', '.input-quiz-max-attempts').on('input', '.input-quiz-max-attempts', function() {
+        const quiz = currentSectionData.quizzes[Number($(this).closest('.quiz-edit-card').data('quiz-index'))];
+        quiz.max_attempts_allowed = Math.max(1, Number($(this).val()) || 1);
     });
 
     // Submit Assignment Handler
@@ -587,7 +656,8 @@ function swapArrayElements(arr, i, j) {
 }
 
 function animateListSwap($card, index, targetIndex, cardSelector, onComplete) {
-    const $cards = $(`#lessons-list ${cardSelector}, #assignments-list ${cardSelector}`);
+    const $list = $card.closest('#lessons-list, #assignments-list, #quizzes-list');
+    const $cards = $list.find(cardSelector);
     const $targetCard = $cards.eq(targetIndex);
     if (!$card.length || !$targetCard.length || $card.is(':animated')) return;
 
@@ -629,6 +699,44 @@ function renderQuizzesList() {
     $('#empty-quizzes-msg').toggleClass('hidden', quizzes.length !== 0);
 
     quizzes.forEach((quiz, index) => {
+        if (isEditMode) {
+            $container.append(`
+                <div class="quiz-edit-card border-2 border-indigo-200 bg-white rounded-xl p-5 space-y-4 shadow-sm" data-quiz-index="${index}">
+                    <div class="flex items-center justify-between border-b border-gray-100 pb-3">
+                        <span class="bg-indigo-100 text-indigo-700 font-bold text-xs px-2.5 py-1 rounded-md">Quiz #${index + 1}</span>
+                        <div class="flex items-center space-x-1">
+                            <button type="button" class="btn-move-quiz-up p-1 text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors ${index === 0 ? 'hidden' : ''}" title="Pindah ke Atas">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"></path></svg>
+                            </button>
+                            <button type="button" class="btn-move-quiz-down p-1 text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors ${index === quizzes.length - 1 ? 'hidden' : ''}" title="Pindah ke Bawah">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 9l7 7 7-7"></path></svg>
+                            </button>
+                            <button type="button" class="btn-delete-quiz p-1.5 text-red-500 hover:bg-red-50 rounded transition-colors ml-1" title="Hapus quiz">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 01-1 1v3M4 7h16"></path></svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                        <div class="md:col-span-2">
+                            <label class="block text-xs font-semibold text-gray-700 mb-1">Judul Quiz</label>
+                            <input type="text" class="input-quiz-title w-full px-3 py-2 text-sm font-medium border border-gray-300 rounded-lg" value="${escapeHtml(quiz.quiz_title || '')}" placeholder="Judul quiz...">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-700 mb-1">Durasi (menit)</label>
+                            <input type="number" min="1" step="1" class="input-quiz-duration w-full px-3 py-2 text-sm border border-gray-300 rounded-lg" value="${Math.max(1, Number(quiz.duration_minutes) || 1)}">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-700 mb-1">Nilai Lulus</label>
+                            <input type="number" min="1" step="0.01" class="input-quiz-passing-grade w-full px-3 py-2 text-sm border border-gray-300 rounded-lg" value="${Math.max(1, Number(quiz.passing_grade) || 1)}">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-700 mb-1">Maksimal Percobaan</label>
+                            <input type="number" min="1" step="1" class="input-quiz-max-attempts w-full px-3 py-2 text-sm border border-gray-300 rounded-lg" value="${Math.max(1, Number(quiz.max_attempts_allowed) || 1)}">
+                        </div>
+                    </div>
+                </div>`);
+            return;
+        }
         const attempts = Number(quiz.attempt_count || 0);
         const maxAttempts = Number(quiz.max_attempts_allowed || 0);
         const isParent = Boolean(currentSectionData.is_parent && currentSectionData.active_student_id);
@@ -643,8 +751,13 @@ function renderQuizzesList() {
         $container.append(`
         <div class="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-gray-200 bg-white px-5 py-4 shadow-sm">
             <div>
-                <h3 class="text-lg font-bold text-gray-900">${escapeHtml(quiz.quiz_title)}</h3>
-                <p class="mt-1 text-sm text-gray-500">${quiz.questions.length} soal • ${quiz.duration_minutes ? `${quiz.duration_minutes} menit` : 'Tanpa batas waktu'} • Nilai lulus: ${quiz.passing_grade}</p>
+                <div class="flex items-start gap-3">
+                    <span class="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-green-100 text-xs font-bold text-green-700">${index + 1}</span>
+                    <div>
+                        <h3 class="text-lg font-bold text-gray-900">${escapeHtml(quiz.quiz_title)}</h3>
+                        <p class="mt-1 text-sm text-gray-500">${quiz.questions.length} soal • ${quiz.duration_minutes ? `${quiz.duration_minutes} menit` : 'Tanpa batas waktu'} • Nilai lulus: ${quiz.passing_grade}</p>
+                    </div>
+                </div>
             </div>
             <div class="flex w-full flex-wrap items-center justify-end gap-4 sm:w-auto">
                 ${isParent ? `<div class="text-right">${attemptInfo}</div>` : ''}
@@ -827,6 +940,7 @@ function loadSectionDetail(section_id) {
                 currentSectionData = r.message;
                 deletedLessonIds = [];
                 deletedAssignmentIds = [];
+                deletedQuizIds = [];
                 isEditMode = false;
                 renderPage();
                 $('#section-content').removeClass('hidden');
@@ -852,7 +966,7 @@ function renderPage() {
     if (isEditMode) {
         $('#btn-section-enable-edit').addClass('hidden');
         $('#section-edit-mode-actions').removeClass('hidden');
-        $('#btn-add-lesson, #btn-add-assignment').removeClass('hidden');
+        $('#btn-add-lesson, #btn-add-assignment, #btn-add-quiz').removeClass('hidden');
         
         $('#section-info-view').addClass('hidden');
         $('#section-info-edit').removeClass('hidden');
@@ -862,7 +976,7 @@ function renderPage() {
     } else {
         $('#btn-section-enable-edit').toggleClass('hidden', Boolean(data.is_parent));
         $('#section-edit-mode-actions').addClass('hidden');
-        $('#btn-add-lesson, #btn-add-assignment').addClass('hidden');
+        $('#btn-add-lesson, #btn-add-assignment, #btn-add-quiz').addClass('hidden');
 
         $('#section-info-view').removeClass('hidden');
         $('#section-info-edit').addClass('hidden');
@@ -894,7 +1008,7 @@ function renderLessonsList() {
                 <div class="lesson-accordion border border-gray-200 bg-white rounded-xl shadow-sm overflow-hidden">
                     <button type="button" class="section-accordion-toggle w-full flex items-center justify-between py-3 px-5 text-left hover:bg-gray-50 transition-colors" aria-expanded="false">
                         <span class="flex items-center gap-3 min-w-0">
-                            <span class="flex items-center justify-center w-7 h-7 bg-gray-100 text-gray-700 font-bold text-xs rounded-lg flex-shrink-0">${index + 1}</span>
+                            <span class="flex items-center justify-center w-7 h-7 bg-blue-100 text-blue-700 font-bold text-xs rounded-lg flex-shrink-0">${index + 1}</span>
                             <span class="min-w-0"><strong class="block text-base text-gray-900 truncate">${escapeHtml(lesson.lesson_title)}</strong><span class="flex flex-wrap gap-1 mt-1">${typeBadges}</span></span>
                         </span>
                         <svg class="section-accordion-icon w-5 h-5 text-gray-400 transition-transform flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
@@ -912,7 +1026,7 @@ function renderLessonsList() {
             $container.append(`
                 <div class="lesson-edit-card border-2 border-indigo-200 bg-white rounded-xl p-5 space-y-4 shadow-sm" data-lesson-index="${index}">
                     <div class="flex items-center justify-between border-b border-gray-100 pb-3">
-                        <span class="bg-indigo-100 text-indigo-700 font-bold text-xs px-2.5 py-1 rounded-md">Materi #${index + 1}</span>
+                        <span class="bg-blue-100 text-blue-700 font-bold text-xs px-2.5 py-1 rounded-md">Materi #${index + 1}</span>
                         <div class="flex items-center space-x-1">
                             <button type="button" class="btn-move-lesson-up p-1 text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors ${index === 0 ? 'hidden' : ''}" title="Pindah ke Atas">
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"></path></svg>
@@ -1162,7 +1276,9 @@ function handleSaveSection() {
                 lessons: JSON.stringify(currentSectionData.lessons || []),
                 deleted_lesson_ids: JSON.stringify(deletedLessonIds),
                 assignments: JSON.stringify(currentSectionData.assignments || []),
-                deleted_assignment_ids: JSON.stringify(deletedAssignmentIds)
+                deleted_assignment_ids: JSON.stringify(deletedAssignmentIds),
+                quizzes: JSON.stringify(currentSectionData.quizzes || []),
+                deleted_quiz_ids: JSON.stringify(deletedQuizIds)
             },
             freeze: true,
             freeze_message: __('Menyimpan perubahan...'),

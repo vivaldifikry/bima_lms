@@ -129,6 +129,7 @@ def get_section_detail(section_id, active_student_id=None):
                 q.duration_minutes,
                 q.passing_grade,
                 q.max_attempts_allowed,
+                q.display_order,
                 qq.quiz_question_id,
                 qq.question_id,
                 qq.display_order,
@@ -146,7 +147,8 @@ def get_section_detail(section_id, active_student_id=None):
             LEFT JOIN master.lms_question_options qo ON qo.question_id = qb.question_id
             WHERE q.section_id = %s
               AND q.is_deleted = false
-            ORDER BY q.quiz_id, qq.display_order ASC, qq.quiz_question_id ASC,
+            ORDER BY q.display_order ASC NULLS LAST, q.quiz_id,
+                     qq.display_order ASC, qq.quiz_question_id ASC,
                      qo.option_id ASC
         """, (section_id,))
         quiz_rows = cursor.fetchall()
@@ -268,6 +270,7 @@ def get_section_detail(section_id, active_student_id=None):
                 "duration_minutes": row["duration_minutes"] or 0,
                 "passing_grade": float(row["passing_grade"]) if row["passing_grade"] is not None else 0,
                 "max_attempts_allowed": row["max_attempts_allowed"] or 0,
+                "display_order": row["display_order"] or 0,
                 "questions": [],
                 "attempt_count": quiz_attempts.get(row["quiz_id"], {}).get("attempt_count", 0),
                 "last_submitted_at": quiz_attempts.get(row["quiz_id"], {}).get("last_submitted_at"),
@@ -617,7 +620,7 @@ def normalize_lesson_types(value):
 
 
 @frappe.whitelist()
-def batch_save_section_detail(section_id, section_title=None, description=None, lessons=None, deleted_lesson_ids=None, assignments=None, deleted_assignment_ids=None):
+def batch_save_section_detail(section_id, section_title=None, description=None, lessons=None, deleted_lesson_ids=None, assignments=None, deleted_assignment_ids=None, quizzes=None, deleted_quiz_ids=None):
     """
     Menyimpan detail section, daftar lesson, dan daftar assignment (tugas) secara batch.
     """
@@ -632,9 +635,14 @@ def batch_save_section_detail(section_id, section_title=None, description=None, 
         assignments = json.loads(assignments)
     if isinstance(deleted_assignment_ids, str):
         deleted_assignment_ids = json.loads(deleted_assignment_ids)
+    if isinstance(quizzes, str):
+        quizzes = json.loads(quizzes)
+    if isinstance(deleted_quiz_ids, str):
+        deleted_quiz_ids = json.loads(deleted_quiz_ids)
 
     deleted_lesson_ids = deleted_lesson_ids or []
     deleted_assignment_ids = deleted_assignment_ids or []
+    deleted_quiz_ids = deleted_quiz_ids or []
 
     try:
         conn = get_pg_connection()
@@ -738,11 +746,52 @@ def batch_save_section_detail(section_id, section_title=None, description=None, 
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, false)
                     """, (course_id, section_id, title, instructions, attachment_url, deadline, max_score, display_order, current_user_id))
 
+        # 5. Handle Quiz metadata (soft delete, insert, update, and reorder).
+        if deleted_quiz_ids:
+            cursor.execute("""
+                UPDATE lms.quizzes
+                SET is_deleted = true
+                WHERE section_id = %s AND quiz_id = ANY(%s)
+            """, (section_id, [int(qid) for qid in deleted_quiz_ids]))
+
+        if quizzes:
+            for display_order, quiz in enumerate(quizzes, start=1):
+                quiz_id = quiz.get("quiz_id")
+                quiz_title = (quiz.get("quiz_title") or "Quiz Baru").strip()
+                duration_minutes = int(quiz.get("duration_minutes") or 1)
+                passing_grade = float(quiz.get("passing_grade") or 1)
+                max_attempts_allowed = int(quiz.get("max_attempts_allowed") or 1)
+                if duration_minutes < 1 or passing_grade < 1 or max_attempts_allowed < 1:
+                    frappe.throw("Durasi, nilai lulus, dan maksimal percobaan harus minimal 1.", frappe.ValidationError)
+
+                if quiz_id:
+                    cursor.execute("""
+                        UPDATE lms.quizzes
+                        SET quiz_title = %s,
+                            duration_minutes = %s,
+                            passing_grade = %s,
+                            max_attempts_allowed = %s,
+                            display_order = %s
+                        WHERE quiz_id = %s AND section_id = %s AND is_deleted = false
+                    """, (quiz_title, duration_minutes, passing_grade,
+                          max_attempts_allowed, display_order, quiz_id, section_id))
+                else:
+                    cursor.execute("""
+                        INSERT INTO lms.quizzes
+                            (course_id, section_id, quiz_title, duration_minutes,
+                             passing_grade, max_attempts_allowed, created_by,
+                             created_on, display_order, is_deleted)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s,
+                                NOW() AT TIME ZONE 'Asia/Jakarta', %s, false)
+                    """, (course_id, section_id, quiz_title, duration_minutes,
+                          passing_grade, max_attempts_allowed, current_user_id,
+                          display_order))
+
         conn.commit()
         cursor.close()
         conn.close()
 
-        return {"status": "success", "message": "Berhasil memperbarui data bab, materi, dan tugas."}
+        return {"status": "success", "message": "Berhasil memperbarui data bab, materi, tugas, dan quiz."}
 
     except Exception as e:
         frappe.logger("bima_lms").error(f"Error batch_save_section_detail: {str(e)}")
