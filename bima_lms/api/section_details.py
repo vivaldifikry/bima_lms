@@ -145,6 +145,7 @@ def get_section_detail(section_id, active_student_id=None):
             LEFT JOIN master.lms_question_bank qb ON qb.question_id = qq.question_id
                 AND qb.is_deleted = false
             LEFT JOIN master.lms_question_options qo ON qo.question_id = qb.question_id
+                AND qo.is_deleted = false
             WHERE q.section_id = %s
               AND q.is_deleted = false
             ORDER BY q.display_order ASC NULLS LAST, q.quiz_id,
@@ -532,6 +533,208 @@ def submit_quiz_attempt(quiz_id, student_id, answers=None):
         frappe.throw(f"Gagal menyimpan hasil quiz: {str(e)}")
     finally:
         conn.close()
+
+
+@frappe.whitelist()
+def save_quiz_questions(quiz_id, questions=None, deleted_question_ids=None, deleted_option_ids=None):
+    """Save teacher-managed quiz questions and options in one transaction."""
+    if not quiz_id:
+        frappe.throw("Quiz wajib diisi.", frappe.MandatoryError)
+
+    if isinstance(questions, str):
+        questions = json.loads(questions)
+    if isinstance(deleted_question_ids, str):
+        deleted_question_ids = json.loads(deleted_question_ids)
+    if isinstance(deleted_option_ids, str):
+        deleted_option_ids = json.loads(deleted_option_ids)
+    questions = questions or []
+    deleted_question_ids = [int(value) for value in (deleted_question_ids or [])]
+    deleted_option_ids = [int(value) for value in (deleted_option_ids or [])]
+
+    conn = get_pg_connection()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            if "LMS Teacher" not in frappe.get_roles(frappe.session.user):
+                frappe.throw("Hanya guru yang dapat mengubah isi quiz.", frappe.PermissionError)
+
+            cur.execute("""
+                SELECT quiz_id
+                FROM lms.quizzes
+                WHERE quiz_id = %s AND is_deleted = false
+                FOR UPDATE
+            """, (quiz_id,))
+            if not cur.fetchone():
+                frappe.throw("Quiz tidak ditemukan.", frappe.DoesNotExistError)
+
+            current_user_id = get_current_user_id(conn)
+            if not current_user_id:
+                cur.execute("SELECT user_id FROM auth.users WHERE is_deleted = false ORDER BY user_id ASC LIMIT 1")
+                user_row = cur.fetchone()
+                current_user_id = user_row["user_id"] if user_row else 1
+
+            if deleted_question_ids:
+                cur.execute("""
+                    UPDATE master.lms_question_bank qb
+                    SET is_deleted = true
+                    WHERE qb.question_id = ANY(%s)
+                      AND EXISTS (
+                          SELECT 1 FROM lms.quiz_questions qq
+                          WHERE qq.quiz_id = %s AND qq.question_id = qb.question_id
+                      )
+                """, (deleted_question_ids, quiz_id))
+            if deleted_option_ids:
+                cur.execute("""
+                    UPDATE master.lms_question_options qo
+                    SET is_deleted = true
+                    WHERE qo.option_id = ANY(%s)
+                      AND EXISTS (
+                          SELECT 1
+                          FROM lms.quiz_questions qq
+                          WHERE qq.quiz_id = %s AND qq.question_id = qo.question_id
+                      )
+                """, (deleted_option_ids, quiz_id))
+
+            for display_order, question in enumerate(questions, start=1):
+                question_text = (question.get("question_text") or "").strip()
+                points = float(question.get("points") or 0)
+                options = question.get("options") or []
+                if not question_text:
+                    frappe.throw("Pertanyaan tidak boleh kosong.", frappe.ValidationError)
+                if points < 1:
+                    frappe.throw("Bobot setiap soal minimal 1.", frappe.ValidationError)
+                if len(options) < 2:
+                    frappe.throw("Setiap soal minimal memiliki 2 pilihan jawaban.", frappe.ValidationError)
+                correct_count = sum(1 for option in options if option.get("is_correct"))
+                if correct_count != 1:
+                    frappe.throw("Setiap soal harus memiliki tepat 1 kunci jawaban.", frappe.ValidationError)
+
+                question_id = question.get("question_id")
+                if question_id:
+                    cur.execute("""
+                        UPDATE master.lms_question_bank
+                        SET question_text = %s,
+                            question_type = 'multiple_choice',
+                            is_deleted = false
+                        WHERE question_id = %s
+                    """, (question_text, question_id))
+                else:
+                    cur.execute("""
+                        SELECT setval(
+                            'master.lms_question_bank_question_id_seq'::regclass,
+                            GREATEST(
+                                COALESCE((SELECT MAX(question_id) FROM master.lms_question_bank), 0),
+                                (SELECT last_value FROM master.lms_question_bank_question_id_seq)
+                            ),
+                            true
+                        )
+                    """)
+                    cur.execute("""
+                        INSERT INTO master.lms_question_bank
+                            (question_text, question_type, default_points, created_by,
+                             created_on, is_deleted)
+                        VALUES (%s, 'multiple_choice', 5.00, %s,
+                                NOW() AT TIME ZONE 'Asia/Jakarta', false)
+                        RETURNING question_id
+                    """, (question_text, current_user_id))
+                    question_id = cur.fetchone()["question_id"]
+
+                quiz_question_id = question.get("quiz_question_id")
+                if quiz_question_id:
+                    cur.execute("""
+                        UPDATE lms.quiz_questions
+                        SET question_id = %s, display_order = %s, points_override = %s
+                        WHERE quiz_question_id = %s AND quiz_id = %s
+                    """, (question_id, display_order, points, quiz_question_id, quiz_id))
+                else:
+                    cur.execute("""
+                        SELECT setval(
+                            'lms.quiz_questions_quiz_question_id_seq'::regclass,
+                            GREATEST(
+                                COALESCE((SELECT MAX(quiz_question_id) FROM lms.quiz_questions), 0),
+                                (SELECT last_value FROM lms.quiz_questions_quiz_question_id_seq)
+                            ),
+                            true
+                        )
+                    """)
+                    cur.execute("""
+                        INSERT INTO lms.quiz_questions
+                            (quiz_id, question_id, display_order, points_override)
+                        VALUES (%s, %s, %s, %s)
+                    """, (quiz_id, question_id, display_order, points))
+
+                for option in options:
+                    option_text = (option.get("option_text") or "").strip()
+                    if not option_text:
+                        frappe.throw("Teks pilihan jawaban tidak boleh kosong.", frappe.ValidationError)
+                    option_id = option.get("option_id")
+                    if option_id:
+                        cur.execute("""
+                            UPDATE master.lms_question_options
+                            SET option_text = %s, is_correct = %s, is_deleted = false
+                            WHERE option_id = %s AND question_id = %s
+                        """, (option_text, bool(option.get("is_correct")), option_id, question_id))
+                    else:
+                        cur.execute("""
+                            SELECT setval(
+                                'master.lms_question_options_option_id_seq'::regclass,
+                                GREATEST(
+                                    COALESCE((SELECT MAX(option_id) FROM master.lms_question_options), 0),
+                                    (SELECT last_value FROM master.lms_question_options_option_id_seq)
+                                ),
+                                true
+                            )
+                        """)
+                        cur.execute("""
+                            INSERT INTO master.lms_question_options
+                                (question_id, option_text, is_correct, is_deleted)
+                            VALUES (%s, %s, %s, false)
+                        """, (question_id, option_text, bool(option.get("is_correct"))))
+
+            cur.execute("""
+                SELECT qq.quiz_question_id, qq.question_id, qq.display_order,
+                       qq.points_override, qb.question_text, qb.question_type,
+                       qb.default_points, qo.option_id, qo.option_text, qo.is_correct
+                FROM lms.quiz_questions qq
+                JOIN master.lms_question_bank qb ON qb.question_id = qq.question_id
+                    AND qb.is_deleted = false
+                LEFT JOIN master.lms_question_options qo ON qo.question_id = qb.question_id
+                    AND qo.is_deleted = false
+                WHERE qq.quiz_id = %s
+                ORDER BY qq.display_order ASC, qq.quiz_question_id ASC, qo.option_id ASC
+            """, (quiz_id,))
+            rows = cur.fetchall()
+
+        conn.commit()
+        return {"status": "success", "questions": group_quiz_question_rows(rows)}
+    except Exception as e:
+        conn.rollback()
+        frappe.logger("bima_lms").error(f"Error save_quiz_questions: {str(e)}")
+        frappe.throw(f"Gagal menyimpan soal quiz: {str(e)}")
+    finally:
+        conn.close()
+
+
+def group_quiz_question_rows(rows):
+    questions = []
+    for row in rows:
+        question = next((item for item in questions if item["question_id"] == row["question_id"]), None)
+        if not question:
+            question = {
+                "quiz_question_id": row["quiz_question_id"],
+                "question_id": row["question_id"],
+                "question_text": row["question_text"] or "",
+                "question_type": row["question_type"] or "multiple_choice",
+                "points": float(row["points_override"] if row["points_override"] is not None else row["default_points"] or 0),
+                "options": []
+            }
+            questions.append(question)
+        if row["option_id"] is not None:
+            question["options"].append({
+                "option_id": row["option_id"],
+                "option_text": row["option_text"] or "",
+                "is_correct": bool(row["is_correct"])
+            })
+    return questions
 
 
 @frappe.whitelist()
