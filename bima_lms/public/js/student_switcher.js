@@ -51,9 +51,16 @@ window.StudentSwitcher = {
     },
 
     // Cek apakah user adalah Administrator atau System Manager
+    isBuiltinAdministrator: function() {
+        const sessionUser = (frappe.session && frappe.session.user) || (frappe.boot && frappe.boot.user && frappe.boot.user.name) || '';
+        const userName = String(sessionUser || '').trim();
+        return userName === 'Administrator' || /administrator/i.test(userName);
+    },
+
     isAdminOrSystemManager: function() {
         const roles = this.getUserRoles();
-        return roles.includes('Administrator') || 
+        const builtinAdmin = this.isBuiltinAdministrator();
+        return builtinAdmin || roles.includes('Administrator') || 
                roles.includes('System Manager') ||
                roles.includes('Admin');
     },
@@ -155,9 +162,10 @@ window.StudentSwitcher = {
         const userRoles = this.getUserRoles();
         const isParent = userRoles.includes('LMS Parent');
         const isAdmin = this.isAdminOrSystemManager();
+        const isBuiltinAdmin = this.isBuiltinAdministrator();
 
         // Jika user adalah Admin atau System Manager, tidak perlu pilih anak
-        if (isAdmin) {
+        if (isAdmin || isBuiltinAdmin) {
             // Hapus data student jika ada (karena admin tidak perlu)
             this.clearActiveStudent();
             // Sembunyikan widget switcher

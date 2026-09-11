@@ -224,7 +224,7 @@ function getPageHTML() {
                             </div>
                             <div class="min-h-0 flex-1 grid grid-cols-1 gap-6 overflow-hidden px-6 py-8 lg:grid-cols-[220px_minmax(0,1fr)]">
                                 <aside id="quiz-question-nav" class="order-2 h-full min-h-0 overflow-y-auto rounded-xl border border-gray-200 bg-gray-50 p-4 lg:order-1">
-                                    <h3 class="text-sm font-bold text-gray-800">Navigasi Soal (Geser untuk Memindahkan)</h3>
+                                    <h3 id="quiz-nav-title" class="text-sm font-bold text-gray-800">Navigasi Soal</h3>
                                     <div id="quiz-question-buttons" class="mt-3 grid grid-cols-5 gap-2 pr-1"></div>
                                 </aside>
                                 <div id="quiz-question-view" class="order-1 min-h-0 overflow-y-auto px-0 lg:order-2"></div>
@@ -882,9 +882,11 @@ function startQuiz(quiz) {
 function renderQuizQuestion() {
     if (!activeQuiz) return;
     if (quizEditMode) {
+        $('#quiz-nav-title').text('Navigasi Soal (Geser untuk Memindahkan)');
         renderQuizEditView();
         return;
     }
+    $('#quiz-nav-title').text('Navigasi Soal');
     if (!activeQuiz.questions.length) {
         $('#quiz-modal-title').text(activeQuiz.quiz_title);
         $('#quiz-modal-meta').text('Quiz belum memiliki soal.');
@@ -1063,15 +1065,18 @@ function renderPage() {
     if (isEditMode) {
         $('#btn-section-enable-edit').addClass('hidden');
         $('#section-edit-mode-actions').removeClass('hidden');
+        $('#btn-add-lesson, #btn-add-assignment, #btn-add-quiz').removeClass('hidden');
+        if (activeQuiz) {
+            quizEditMode = false;
             closeQuizModal(true);
-        
+        }
+
         $('#section-info-view').addClass('hidden');
         $('#section-info-edit').removeClass('hidden');
-    const shouldReload = reloadAfterClose || quizResultVisible;
         $('#input-section-title').val(data.section_title);
         $('#input-section-desc').val(data.description);
     } else {
-    $('#quiz-timer').removeClass('hidden');
+        $('#quiz-timer').removeClass('hidden');
         $('#btn-section-enable-edit').toggleClass('hidden', Boolean(data.is_parent));
         $('#section-edit-mode-actions').addClass('hidden');
         $('#btn-add-lesson, #btn-add-assignment, #btn-add-quiz').addClass('hidden');
@@ -1364,7 +1369,7 @@ function toggleEditMode(enableEdit) {
 }
 
 function handleSaveSection() {
-    frappe.confirm(__('Simpan semua perubahan pada bab, materi, dan tugas ini?'), function() {
+    frappe.confirm(__('Simpan semua perubahan pada bab, materi, tugas, dan quiz ini?'), function() {
         frappe.call({
             method: 'bima_lms.api.section_details.batch_save_section_detail',
             args: {

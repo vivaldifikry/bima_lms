@@ -113,6 +113,59 @@ frappe.pages['courses'].on_page_load = function(wrapper) {
                 max-width: none !important;
                 max-height: none !important;
             }
+
+            .score-chart-legend {
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+                margin-top: 8px;
+                padding: 4px 0;
+            }
+
+            .score-chart-filter-row {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 8px;
+                padding-bottom: 6px;
+                border-bottom: 1px solid #e2e8f0;
+            }
+
+            .course-toggle-btn,
+            .course-filter-btn,
+            .score-chart-legend-item {
+                transition: all 0.2s ease;
+            }
+
+            .score-chart-legend-group {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 8px;
+                padding: 8px 10px;
+                border: 1px solid #e2e8f0;
+                border-radius: 12px;
+                background: #f8fafc;
+            }
+
+            .score-chart-legend-group.is-active {
+                border-color: rgba(79, 70, 229, 0.35);
+                background: rgba(79, 70, 229, 0.04);
+            }
+
+            .score-chart-legend-group-title {
+                font-size: 11px;
+                font-weight: 800;
+                letter-spacing: 0.02em;
+                line-height: 1.2;
+                white-space: normal;
+                word-break: break-word;
+                max-width: 180px;
+            }
+
+            .score-chart-legend-item {
+                max-width: 100%;
+            }
         `;
         document.head.appendChild(style);
     }
@@ -188,9 +241,22 @@ frappe.pages['courses'].on_page_load = function(wrapper) {
                                     <h2 class="text-lg font-bold text-gray-800">Perbandingan Nilai Siswa</h2>
                                     <p class="text-sm text-gray-500">Semua nilai siswa dari semua mata pelajaran</p>
                                 </div>
-                                
                             </div>
-                            <!-- <div id="score-chart-legend" class="score-chart-legend"></div> -->
+
+                            <div class="mb-4">
+                                <div class="inline-flex p-1 rounded-xl bg-slate-100 border border-slate-200">
+                                    <button type="button" data-chart-type="assignment"
+                                        class="chart-tab px-3 py-2 rounded-lg text-xs font-semibold transition-all duration-200 border border-transparent bg-white text-indigo-700 shadow-sm">
+                                        Nilai Tugas Siswa
+                                    </button>
+                                    <button type="button" data-chart-type="quiz"
+                                        class="chart-tab px-3 py-2 rounded-lg text-xs font-semibold transition-all duration-200 border border-transparent text-slate-600 hover:text-indigo-700">
+                                        Nilai Quiz Siswa
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div id="score-chart-legend" class="score-chart-legend"></div>
                             <div class="score-chart-scroll mt-4">
                                 <svg id="custom-score-chart" viewBox="0 0 1000 420" preserveAspectRatio="xMinYMin meet" aria-label="Chart nilai siswa"></svg>
                             </div>
@@ -233,6 +299,7 @@ let selectedCategoryIds = [];
 let filterDialog = null;
 let isParentUser = false;
 let isAdminUser = false; // Tambahkan flag untuk admin
+let activeChartType = 'assignment';
 
 function initCoursesPage() {
     console.log('initCoursesPage called');
@@ -815,18 +882,19 @@ function load_courses_data(studentId, rombelIds, categoryIds) {
 }
 
 function loadScoreChart() {
-    console.log('loadScoreChart called');
-    
-    // Cek apakah user adalah Parent dan ada studentId
-    let args = {};
+    console.log('loadScoreChart called for chart type:', activeChartType);
+
+    const normalizedType = (activeChartType || 'assignment').toLowerCase();
+    const chartType = normalizedType === 'quiz' ? 'quiz' : 'assignment';
+
+    let args = { chart_type: chartType };
     if (isParentUser && currentStudentId) {
         args.student_id = currentStudentId;
-        console.log('Parent mode: loading chart for student_id:', currentStudentId);
+        console.log('Parent mode: loading', chartType, 'chart for student_id:', currentStudentId);
     } else {
-        console.log('Admin/Guru mode: loading chart for all students');
+        console.log('Admin/Guru mode: loading', chartType, 'chart for all students');
     }
-    
-    // Cek apakah CourseScoreBarChart sudah tersedia
+
     if (window.CourseScoreBarChart && typeof window.CourseScoreBarChart.load === 'function') {
         console.log('CourseScoreBarChart already loaded, calling load()');
         try {
@@ -837,7 +905,6 @@ function loadScoreChart() {
         return;
     }
 
-    // Jika belum tersedia, coba load script
     console.log('CourseScoreBarChart not available, loading script...');
     frappe.require('/assets/bima_lms/js/course_score_bar_chart.js', function() {
         console.log('Script loaded, checking CourseScoreBarChart...');
@@ -868,4 +935,54 @@ function escapeHtml(text) {
 // Bind event untuk tombol filter setelah DOM siap
 $(document).on('click', '#btn-filter-rombels', function() {
     openFilterModal();
+});
+
+$(document).on('click', '.chart-tab', function() {
+    const selectedType = $(this).data('chart-type');
+    if (!selectedType || selectedType === activeChartType) return;
+
+    activeChartType = selectedType;
+    $('.chart-tab').removeClass('bg-white text-indigo-700 shadow-sm').addClass('text-slate-600');
+    $('.chart-tab').css({
+        'background': 'transparent',
+        'color': '#475569',
+        'box-shadow': 'none',
+        'border-color': 'transparent'
+    });
+
+    const $activeTab = $(`.chart-tab[data-chart-type="${selectedType}"]`);
+    $activeTab.removeClass('text-slate-600').addClass('bg-white text-indigo-700 shadow-sm');
+    $activeTab.css({
+        'background': '#ffffff',
+        'color': '#4338ca',
+        'box-shadow': '0 1px 2px rgba(15, 23, 42, 0.08)',
+        'border-color': 'transparent'
+    });
+
+    loadScoreChart();
+});
+
+function applyActiveChartTabState() {
+    $('.chart-tab').removeClass('bg-white text-indigo-700 shadow-sm').addClass('text-slate-600');
+    $('.chart-tab').css({
+        'background': 'transparent',
+        'color': '#475569',
+        'box-shadow': 'none',
+        'border-color': 'transparent'
+    });
+
+    const $selected = $(`.chart-tab[data-chart-type="${activeChartType || 'assignment'}"]`);
+    if ($selected.length) {
+        $selected.removeClass('text-slate-600').addClass('bg-white text-indigo-700 shadow-sm');
+        $selected.css({
+            'background': '#ffffff',
+            'color': '#4338ca',
+            'box-shadow': '0 1px 2px rgba(15, 23, 42, 0.08)',
+            'border-color': 'transparent'
+        });
+    }
+}
+
+$(function() {
+    applyActiveChartTabState();
 });

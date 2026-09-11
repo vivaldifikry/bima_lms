@@ -717,9 +717,7 @@ def get_course_score_chart_data(student_id=None):
                         statuses.append('not_submitted')
             
             label = f"{assignment['title']} ({assignment['course_title']})"
-            if len(label) > 30:
-                label = label[:27] + '...'
-            
+
             datasets.append({
                 'name': label,
                 'assignment_id': assignment_id,
@@ -766,6 +764,211 @@ def get_course_score_chart_data(student_id=None):
             "labels": [],
             "datasets": [],
             "is_single_student": False
+        }
+
+@frappe.whitelist()
+def get_course_quiz_chart_data(student_id=None):
+    """Ambil data nilai quiz siswa dari latest attempt per quiz."""
+    current_user_email = frappe.session.user
+    user_roles = frappe.get_roles(current_user_email) or []
+    is_admin = current_user_email == "Administrator" or any(role in user_roles for role in ["Administrator", "Admin", "LMS Admin", "System Manager"])
+    is_teacher = "LMS Teacher" in user_roles
+    is_parent = "LMS Parent" in user_roles
+
+    if not (is_admin or is_teacher or is_parent):
+        return {
+            "visible": False,
+            "message": "Anda tidak memiliki akses untuk melihat chart nilai quiz siswa.",
+            "labels": [],
+            "datasets": [],
+            "is_single_student": False,
+            "chart_type": "quiz"
+        }
+
+    if is_parent and not student_id and not is_admin:
+        return {
+            "visible": False,
+            "message": "Silakan pilih akun anak terlebih dahulu.",
+            "labels": [],
+            "datasets": [],
+            "is_single_student": False,
+            "chart_type": "quiz"
+        }
+
+    try:
+        conn = get_pg_connection()
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+            pg_user_id = get_current_user_id(conn=conn)
+
+            course_query = """
+                SELECT DISTINCT c.course_id, c.course_title
+                FROM lms.courses c
+                WHERE c.is_deleted = false
+                  AND c.status = 'PUBLISHED'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM lms.course_sections cs
+                      JOIN lms.quizzes q ON q.section_id = cs.section_id
+                      WHERE cs.course_id = c.course_id
+                        AND q.is_deleted = false
+                  )
+            """
+            params = []
+
+            if is_teacher and not is_admin:
+                course_query += " AND c.instructor_id = %s"
+                params.append(pg_user_id)
+
+            cursor.execute(course_query, tuple(params))
+            relevant_courses = cursor.fetchall()
+            if not relevant_courses:
+                return {
+                    "visible": True,
+                    "labels": [],
+                    "datasets": [],
+                    "message": "Tidak ada quiz yang tersedia.",
+                    "is_single_student": bool(student_id),
+                    "chart_type": "quiz"
+                }
+
+            course_ids = [row["course_id"] for row in relevant_courses]
+
+            if is_parent and student_id:
+                student_rows = [{"student_id": int(student_id), "full_name": "Anak"}]
+            else:
+                cursor.execute(
+                    """
+                    SELECT DISTINCT ce.student_id, st.full_name
+                    FROM lms.course_enrollments ce
+                    JOIN kelaskita.students st ON st.id = ce.student_id
+                    WHERE ce.course_id = ANY(%s)
+                      AND ce.status = 'ENROLLED'
+                      AND st.is_deleted = false
+                    ORDER BY st.full_name ASC
+                    """,
+                    (course_ids,),
+                )
+                student_rows = cursor.fetchall()
+
+            if not student_rows:
+                return {
+                    "visible": True,
+                    "labels": [],
+                    "datasets": [],
+                    "message": "Tidak ada siswa yang relevan untuk chart quiz.",
+                    "is_single_student": bool(student_id),
+                    "chart_type": "quiz"
+                }
+
+            labels = []
+            student_lookup = {}
+            for row in student_rows:
+                full_name = row.get("full_name") or f"Siswa {row.get('student_id')}"
+                labels.append(full_name)
+                student_lookup[full_name] = row["student_id"]
+
+            cursor.execute(
+                """
+                WITH ranked_attempts AS (
+                    SELECT
+                        qa.quiz_id,
+                        qa.student_id,
+                        qa.total_score,
+                        qa.result_status,
+                        qa.submitted_at,
+                        qa.attempt_id,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY qa.student_id, qa.quiz_id
+                            ORDER BY qa.submitted_at DESC NULLS LAST, qa.attempt_id DESC
+                        ) AS rn
+                    FROM lms.quiz_attempts qa
+                    JOIN lms.quizzes q ON q.quiz_id = qa.quiz_id
+                    JOIN lms.course_sections cs ON cs.section_id = q.section_id
+                    WHERE q.is_deleted = false
+                      AND cs.course_id = ANY(%s)
+                )
+                SELECT quiz_id, student_id, total_score, result_status, submitted_at
+                FROM ranked_attempts
+                WHERE rn = 1
+                """,
+                (course_ids,),
+            )
+            latest_attempts = cursor.fetchall()
+            latest_attempt_map = {
+                (row["student_id"], row["quiz_id"]): row for row in latest_attempts
+            }
+
+            cursor.execute(
+                """
+                SELECT DISTINCT q.quiz_id, q.quiz_title, q.passing_grade, c.course_id, c.course_title
+                FROM lms.quizzes q
+                JOIN lms.course_sections cs ON cs.section_id = q.section_id
+                JOIN lms.courses c ON c.course_id = cs.course_id
+                WHERE c.course_id = ANY(%s)
+                  AND q.is_deleted = false
+                  AND c.is_deleted = false
+                  AND c.status = 'PUBLISHED'
+                ORDER BY c.course_title ASC, q.quiz_title ASC
+                """,
+                (course_ids,),
+            )
+            quizzes = cursor.fetchall()
+
+            datasets = []
+            for quiz in quizzes:
+                values = []
+                statuses = []
+                result_statuses = []
+                submitted_at_values = []
+
+                for student_name in labels:
+                    student_id_val = student_lookup.get(student_name)
+                    attempt = latest_attempt_map.get((student_id_val, quiz["quiz_id"]))
+                    score_value = float(attempt["total_score"]) if attempt and attempt.get("total_score") is not None else 0
+                    result_status = attempt.get("result_status") if attempt and attempt.get("result_status") else (
+                        "Lulus" if float(score_value) >= float(quiz.get("passing_grade") or 0) else "Tidak Lulus"
+                    ) if attempt else "Belum Mengerjakan"
+
+                    values.append(score_value)
+                    statuses.append("submitted" if attempt and attempt.get("total_score") is not None else "not_submitted")
+                    result_statuses.append(result_status)
+                    submitted_at_values.append(attempt.get("submitted_at") if attempt else None)
+
+                datasets.append({
+                    "name": quiz["quiz_title"],
+                    "quiz_id": quiz["quiz_id"],
+                    "course_id": quiz["course_id"],
+                    "course_title": quiz["course_title"],
+                    "values": values,
+                    "statuses": statuses,
+                    "result_statuses": result_statuses,
+                    "submitted_at": submitted_at_values,
+                    "max_score": float(quiz.get("passing_grade") or 100),
+                    "passing_grade": float(quiz.get("passing_grade") or 100),
+                    "color": "",
+                    "chart_type": "quiz"
+                })
+
+            return {
+                "visible": True,
+                "labels": labels,
+                "datasets": datasets,
+                "title": "Perbandingan Nilai Quiz Siswa",
+                "subtitle": f"{len(labels)} siswa · {len(datasets)} quiz",
+                "is_single_student": bool(student_id and len(labels) == 1),
+                "chart_type": "quiz"
+            }
+    except Exception as e:
+        frappe.logger("bima_lms").error(f"Error get_course_quiz_chart_data: {str(e)}")
+        import traceback
+        frappe.logger("bima_lms").error(traceback.format_exc())
+        return {
+            "visible": False,
+            "message": str(e),
+            "labels": [],
+            "datasets": [],
+            "is_single_student": False,
+            "chart_type": "quiz"
         }
 
 # API untuk mengambil daftar rombel yang diikuti oleh seorang siswa
