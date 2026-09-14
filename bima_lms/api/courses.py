@@ -1297,3 +1297,173 @@ def save_course_rombels(course_id, rombel_ids=None):
         frappe.throw(f"Gagal menyimpan penugasan rombel: {str(e)}")
     finally:
         conn.close()
+
+
+@frappe.whitelist()
+def get_create_course_context():
+    """
+    Mengembalikan role akses user serta daftar guru aktif (role_id = 7) dari auth.users.
+    """
+    current_user_email = frappe.session.user
+    user_roles = frappe.get_roles(current_user_email) or []
+    
+    is_builtin_admin = current_user_email == "Administrator"
+    is_admin = is_builtin_admin or any(r in user_roles for r in ["Administrator", "Admin", "LMS Admin", "System Manager"])
+    is_teacher = "LMS Teacher" in user_roles
+    
+    conn = get_pg_connection()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # Ambil detail user login dari auth.users
+            cur.execute("""
+                SELECT user_id, user_full_name 
+                FROM auth.users 
+                WHERE LOWER(TRIM(user_email)) = LOWER(TRIM(%s)) 
+                  AND COALESCE(is_deleted, false) = false 
+                LIMIT 1;
+            """, (current_user_email,))
+            current_pg_user = cur.fetchone()
+            
+            # Cek akses modal tambah course
+            has_access = is_builtin_admin or is_admin or is_teacher
+            if not has_access:
+                return {
+                    "has_access": False,
+                    "is_admin": False,
+                    "is_teacher": False,
+                    "teachers": [],
+                    "current_user": None
+                }
+            
+            # Ambil daftar guru (hanya role_id = 7) jika admin yang login
+            teachers = []
+            if is_admin or is_builtin_admin:
+                # Query JOIN ke auth.user_roles (atau auth.users_roles) dengan filter role_id = 7
+                cur.execute("""
+                    SELECT DISTINCT u.user_id, u.user_full_name 
+                    FROM auth.users u
+                    INNER JOIN auth.user_roles ur ON u.user_id = ur.user_id
+                    WHERE ur.role_id = 7
+                      AND COALESCE(u.is_deleted, false) = false 
+                    ORDER BY u.user_full_name ASC;
+                """)
+                teachers = cur.fetchall()
+                
+            return {
+                "has_access": True,
+                "is_admin": is_admin or is_builtin_admin,
+                "is_teacher": is_teacher,
+                "teachers": teachers,
+                "current_user": current_pg_user
+            }
+    finally:
+        conn.close()
+
+
+@frappe.whitelist()
+def create_course(course_title, category_id, short_description, instructor_id=None):
+    """
+    Menyimpan course baru ke tabel lms.courses.
+    """
+    if not course_title or len(course_title.strip()) < 3:
+        frappe.throw("Judul course minimal 3 karakter.")
+    if not category_id:
+        frappe.throw("Kategori course wajib dipilih.")
+    if not short_description or len(short_description.strip()) < 3:
+        frappe.throw("Deskripsi singkat minimal 3 karakter.")
+
+    current_user_email = frappe.session.user
+    user_roles = frappe.get_roles(current_user_email) or []
+    is_builtin_admin = current_user_email == "Administrator"
+    is_admin = is_builtin_admin or any(r in user_roles for r in ["Administrator", "Admin", "LMS Admin", "System Manager"])
+    is_teacher = "LMS Teacher" in user_roles
+
+    if not (is_admin or is_teacher):
+        frappe.throw("Anda tidak memiliki akses untuk menambah course.", frappe.PermissionError)
+
+    conn = get_pg_connection()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # 1. Ambil user_id numerik (bigint) user login dari auth.users
+            cur.execute("""
+                SELECT user_id 
+                FROM auth.users 
+                WHERE LOWER(TRIM(user_email)) = LOWER(TRIM(%s)) 
+                  AND COALESCE(is_deleted, false) = false 
+                LIMIT 1;
+            """, (current_user_email,))
+            pg_user = cur.fetchone()
+            
+            if not pg_user or not pg_user.get("user_id"):
+                frappe.throw("User login tidak ditemukan di database auth.users.")
+                
+            current_pg_user_id = pg_user["user_id"]
+
+            # 2. Penentuan instructor_id
+            final_instructor_id = None
+            if is_admin:
+                # Jika admin, gunakan instructor_id yang dipilih dari dialog dropdown
+                if instructor_id:
+                    final_instructor_id = int(instructor_id)
+                else:
+                    # Fallback jika admin tidak memilih, gunakan user_id admin sendiri
+                    final_instructor_id = current_pg_user_id
+            else:
+                # Jika Guru (Teacher), otomatis gunakan user_id numerik dari user yang sedang login
+                final_instructor_id = current_pg_user_id
+
+            if not final_instructor_id:
+                frappe.throw("Instructor ID tidak valid.")
+
+            # Auto-generate course_code: 3 huruf pertama dari course_title (UPPERCASE)
+            clean_title = course_title.strip()
+            course_code = clean_title[:3].upper()
+
+            # 3. Generate course_id baru dengan alias 'new_id' eksplisit
+            cur.execute("SELECT pg_advisory_xact_lock(hashtext('lms.courses.course_id'))")
+            cur.execute("SELECT COALESCE(MAX(course_id), 0) + 1 AS new_id FROM lms.courses")
+            row_id = cur.fetchone()
+            new_course_id = row_id["new_id"]
+
+            # 4. Query INSERT ke tabel lms.courses
+            insert_query = """
+                INSERT INTO lms.courses (
+                    course_id, category_id, instructor_id, course_code, course_title,
+                    thumbnail_url, short_description, full_description, is_sequential,
+                    status, created_by, created_on, last_modified_by, last_modified_on,
+                    is_deleted, video_link, card_gradient, tags, published_on,
+                    is_featured, is_upcoming, is_paid, price, currency,
+                    enable_certification, rating, total_enrollments, total_lessons
+                ) VALUES (
+                    %s, %s, %s, %s, %s,
+                    NULL, %s, NULL, false,
+                    'PUBLISHED', %s, NOW() AT TIME ZONE 'Asia/Jakarta', NULL, NULL,
+                    false, NULL, NULL, NULL, NOW() AT TIME ZONE 'Asia/Jakarta',
+                    false, false, false, 0, NULL,
+                    false, 0, 0, 0
+                )
+            """
+
+            cur.execute(insert_query, (
+                new_course_id,
+                int(category_id),
+                final_instructor_id,
+                course_code,
+                clean_title,
+                short_description.strip(),
+                current_pg_user_id
+            ))
+
+        conn.commit()
+        return {
+            "status": "success",
+            "message": "Course berhasil ditambahkan.",
+            "course_id": new_course_id
+        }
+
+    except Exception as e:
+        conn.rollback()
+        frappe.logger("bima_lms").error(f"Error create_course: {str(e)}")
+        frappe.throw(f"Gagal menambahkan course: {str(e)}")
+    finally:
+        conn.close()

@@ -204,35 +204,6 @@ frappe.pages['courses'].on_page_load = function(wrapper) {
 
                 <!-- Dashboard Content -->
                 <div id="courses-content" class="hidden space-y-6">
-                    <!-- Stats Row with Filter Button -->
-                    <div class="flex flex-wrap items-center justify-between gap-4">
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 flex-1">
-                            <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex items-center space-x-4">
-                                <div class="p-3 bg-indigo-50 rounded-lg text-indigo-600">
-                                    <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" 
-                                              d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path>
-                                    </svg>
-                                </div>
-                                <div>
-                                    <p class="text-sm font-medium text-gray-500">Total Mata Pelajaran</p>
-                                    <h3 id="stat-total-courses" class="text-2xl font-bold text-gray-800">0</h3>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <!-- Filter Button -->
-                        <div id="filter-button-container" class="hidden">
-                            <button id="btn-filter-rombels" 
-                                    class="inline-flex items-center space-x-2 px-4 py-2.5 bg-white border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50 text-gray-700 hover:text-indigo-700 text-sm font-medium rounded-lg shadow-sm transition-all duration-200">
-                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"></path>
-                                </svg>
-                                <span>Filter Courses</span>
-                                <span id="filter-badge" class="hidden bg-indigo-100 text-indigo-700 text-xs font-semibold px-2 py-0.5 rounded-full">0</span>
-                            </button>
-                        </div>
-                    </div>
 
                     <div id="score-chart-section" class="hidden">
                         <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
@@ -263,8 +234,47 @@ frappe.pages['courses'].on_page_load = function(wrapper) {
                         </div>
                     </div>
 
-                    <div>
-                        <h2 class="text-lg font-bold text-gray-800 mb-4">Daftar Mata Pelajaran</h2>
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6" mt-2>
+                        <h2 class="text-lg font-bold text-gray-800 mb-2">Daftar Mata Pelajaran</h2>
+
+                        <!-- Stats Row with Filter Button -->
+                        <div class="flex flex-wrap items-center justify-between gap-4 mb-4">
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-6 flex-1">
+                                <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex items-center space-x-4">
+                                    <div class="p-3 bg-indigo-50 rounded-lg text-indigo-600">
+                                        <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" 
+                                                d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path>
+                                        </svg>
+                                    </div>
+                                    <div>
+                                        <p class="text-sm font-medium text-gray-500">Total Mata Pelajaran</p>
+                                        <h3 id="stat-total-courses" class="text-2xl font-bold text-gray-800">0</h3>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- Filter & Add Course Button Container -->
+                            <div id="filter-button-container" class="hidden flex items-center space-x-2">
+                                <button id="btn-filter-rombels" 
+                                        class="inline-flex items-center space-x-2 px-3 py-2.5 bg-white border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50 text-gray-700 hover:text-indigo-700 text-sm font-medium rounded-lg shadow-sm transition-all duration-200">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"></path>
+                                    </svg>
+                                    <span id="filter-badge" class="hidden bg-indigo-100 text-indigo-700 text-xs font-semibold px-2 py-0.5 rounded-full">0</span>
+                                </button>
+
+                                <!-- Tombol Tambah Course (Hanya Role Terizin) -->
+                                <button id="btn-add-course" 
+                                        class="hidden inline-flex items-center space-x-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-lg shadow-sm transition-all duration-200">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                                    </svg>
+                                    <span>Tambah Course</span>
+                                </button>
+                            </div>
+                        </div>
+
                         <div id="courses-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div>
                     </div>
                 </div>
@@ -338,6 +348,7 @@ function initCoursesPage() {
 }
 
 function loadAllData(studentId) {
+    checkAddCoursePermission();
     // Load categories (selalu dibutuhkan)
     loadCategories(function() {
         // Jika parent dan ada studentId, load rombels
@@ -986,3 +997,125 @@ function applyActiveChartTabState() {
 $(function() {
     applyActiveChartTabState();
 });
+
+
+let createCourseContext = null;
+
+// Dipanggil saat halaman diinisialisasi untuk mengecek hak akses tombol + Tambah Course
+function checkAddCoursePermission() {
+    frappe.call({
+        method: 'bima_lms.api.courses.get_create_course_context',
+        callback: function(r) {
+            if (r.message && r.message.has_access) {
+                createCourseContext = r.message;
+                $('#btn-add-course').removeClass('hidden');
+            } else {
+                $('#btn-add-course').addClass('hidden');
+            }
+        }
+    });
+}
+
+// Event handler klik tombol + Tambah Course
+$(document).on('click', '#btn-add-course', function() {
+    openAddCourseModal();
+});
+
+function openAddCourseModal() {
+    if (!createCourseContext || !createCourseContext.has_access) {
+        frappe.msgprint('Anda tidak memiliki akses untuk membuat course.');
+        return;
+    }
+
+    // Siapkan field form modal
+    let fields = [
+        {
+            label: 'Judul Course',
+            fieldname: 'course_title',
+            fieldtype: 'Data',
+            reqd: 1,
+            description: 'Minimal 3 karakter'
+        },
+        {
+            label: 'Kategori',
+            fieldname: 'category_id',
+            fieldtype: 'Select',
+            options: availableCategories.map(c => ({ label: c.category_name, value: c.category_id })),
+            reqd: 1
+        }
+    ];
+
+    // Jika Admin, tambahkan field Assign to Teacher (Dropdown Guru)
+    if (createCourseContext.is_admin) {
+        let teacherOptions = (createCourseContext.teachers || []).map(t => ({
+            label: t.user_full_name || `User ID ${t.user_id}`,
+            value: t.user_id
+        }));
+
+        fields.push({
+            label: 'Assign to Teacher',
+            fieldname: 'instructor_id',
+            fieldtype: 'Select',
+            options: teacherOptions,
+            reqd: 1
+        });
+    }
+
+    fields.push({
+        label: 'Deskripsi Singkat',
+        fieldname: 'short_description',
+        fieldtype: 'Small Text',
+        reqd: 1,
+        description: 'Minimal 3 karakter'
+    });
+
+    let addCourseDialog = new frappe.ui.Dialog({
+        title: 'Tambah Course Baru',
+        fields: fields,
+        primary_action_label: 'Simpan',
+        secondary_action_label: 'Batal',
+        secondary_action: function() {
+            addCourseDialog.hide();
+        },
+        primary_action: function(values) {
+            if (!values.course_title || values.course_title.trim().length < 3) {
+                frappe.msgprint('Judul Course minimal 3 karakter.');
+                return;
+            }
+            if (!values.short_description || values.short_description.trim().length < 3) {
+                frappe.msgprint('Deskripsi singkat minimal 3 karakter.');
+                return;
+            }
+
+            let payload = {
+                course_title: values.course_title,
+                category_id: values.category_id,
+                short_description: values.short_description
+            };
+
+            // Hanya sertakan instructor_id jika memang diisi oleh Admin
+            if (values.instructor_id) {
+                payload.instructor_id = values.instructor_id;
+            }
+
+            frappe.call({
+                method: 'bima_lms.api.courses.create_course',
+                args: payload,
+                freeze: true,
+                freeze_message: 'Menyimpan Course Baru...',
+                callback: function(r) {
+                    if (r.message && r.message.status === 'success') {
+                        frappe.show_alert({
+                            message: __('Course berhasil ditambahkan'),
+                            indicator: 'green'
+                        });
+                        addCourseDialog.hide();
+                        load_courses_data(currentStudentId, selectedRombelIds, selectedCategoryIds);
+                    }
+                }
+            });
+        }
+    });
+
+    addCourseDialog.show();
+}
