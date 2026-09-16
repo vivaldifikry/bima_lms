@@ -19,9 +19,9 @@ frappe.pages['course-detail'].on_page_load = function(wrapper) {
                 <!-- Header / Breadcrumb & Action Buttons -->
                 <div class="flex flex-wrap items-center justify-between gap-4">
                     <div class="flex items-center space-x-3 bg-white px-4 py-3 rounded-lg shadow-sm border border-gray-100 w-fit">
-                        <a href="javascript:history.back()" 
+                                <a href="/app/courses" 
                            class="inline-flex items-center justify-center p-1.5 rounded-lg text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
-                           title="Kembali">
+                                    title="Kembali ke Courses">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
                             </svg>
@@ -64,6 +64,8 @@ frappe.pages['course-detail'].on_page_load = function(wrapper) {
                         </div>
                     </div>
                 </div>
+
+                <div id="course-navigation" class="pointer-events-none fixed inset-y-0 left-0 right-0 z-40 flex items-center justify-between px-2 sm:px-4"></div>
 
                 <!-- Loading State -->
                 <div id="detail-loading" class="flex items-center justify-center py-20">
@@ -254,13 +256,16 @@ let categoryListCache = null;
 frappe.pages['course-detail'].refresh = function(wrapper) {
     const route = frappe.get_route();
     const params = frappe.route_options || {};
-    const course_id = params.id || route[1];
+    const routeCourse = route[1];
+    const course_id = params.id || (routeCourse && typeof routeCourse === 'object' ? routeCourse.id : routeCourse);
 
     if (!course_id) {
         frappe.msgprint("ID Course tidak ditemukan.");
         frappe.set_route('courses');
         return;
     }
+
+    loadCourseNavigation(course_id);
 
     // Load file komponen eksternal
     frappe.require([
@@ -274,6 +279,60 @@ frappe.pages['course-detail'].refresh = function(wrapper) {
         }
     });
 };
+
+function loadCourseNavigation(course_id) {
+    $('#course-navigation').empty();
+    frappe.call({
+        method: 'bima_lms.api.courses.get_user_courses',
+        args: {
+            student_id: window.StudentSwitcher ? window.StudentSwitcher.getActiveStudentId() : null
+        },
+        callback: function(r) {
+            const courses = r.message && Array.isArray(r.message.courses) ? r.message.courses : [];
+            const currentIndex = courses.findIndex(course => String(course.course_id) === String(course_id));
+            
+            renderCourseNavigation(
+                currentIndex > 0 ? courses[currentIndex - 1] : null,
+                currentIndex >= 0 && currentIndex < courses.length - 1 ? courses[currentIndex + 1] : null
+            );
+        },
+        error: function() {
+            renderCourseNavigation(null, null);
+        }
+    });
+}
+
+function renderCourseNavigation(previousCourse, nextCourse) {
+    const $navigation = $('#course-navigation');
+    if (!$navigation.length) return;
+
+    // Tambahkan div kosong jika prev / next tidak ada agar flex justify-between menjaga posisi elemen tetap di kanan/kiri
+    const prevHtml = previousCourse ? `
+        <button type="button" class="course-nav-button pointer-events-auto group flex items-center gap-2 rounded-lg border border-gray-200 bg-white/95 px-3 py-3 text-gray-500 shadow-lg backdrop-blur transition-all hover:border-indigo-300 hover:text-indigo-600" data-course-id="${previousCourse.course_id}" title="Sebelumnya: ${escapeHtml(previousCourse.course_title)}" aria-label="Course sebelumnya: ${escapeHtml(previousCourse.course_title)}">
+            <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+            <span class="hidden max-w-40 text-left text-xs font-semibold leading-tight group-hover:block">${escapeHtml(previousCourse.course_title)}</span>
+        </button>` : '<div></div>';
+
+    const nextHtml = nextCourse ? `
+        <button type="button" class="course-nav-button pointer-events-auto group flex items-center gap-2 rounded-lg border border-gray-200 bg-white/95 px-3 py-3 text-gray-500 shadow-lg backdrop-blur transition-all hover:border-indigo-300 hover:text-indigo-600" data-course-id="${nextCourse.course_id}" title="Berikutnya: ${escapeHtml(nextCourse.course_title)}" aria-label="Course berikutnya: ${escapeHtml(nextCourse.course_title)}">
+            <span class="hidden max-w-40 text-left text-xs font-semibold leading-tight group-hover:block">${escapeHtml(nextCourse.course_title)}</span>
+            <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+        </button>` : '<div></div>';
+
+    $navigation.html(prevHtml + nextHtml);
+
+    $navigation.find('.course-nav-button').off('click').on('click', function() {
+        const nextCourseId = $(this).data('course-id');
+
+        loadCourseNavigation(nextCourseId);
+        load_course_detail(nextCourseId);
+        if (window.CourseSectionComponent) {
+            CourseSectionComponent.loadSections('#course-section-container', nextCourseId);
+        }
+
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+}
 
 function load_course_detail(course_id) {
     $('#detail-loading').removeClass('hidden');

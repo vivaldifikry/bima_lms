@@ -88,6 +88,8 @@ function getPageHTML() {
                     </div>
                 </div>
 
+                <div id="section-navigation" class="pointer-events-none fixed inset-y-0 left-0 right-0 z-40 flex items-center justify-between px-2 sm:px-4"></div>
+
                 <!-- Loading State -->
                 <div id="section-loading" class="flex items-center justify-center py-20">
                     <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600"></div>
@@ -298,6 +300,63 @@ function initSectionPage() {
 
     bindGlobalEvents();
     loadSectionDetail(currentSectionId);
+}
+
+function loadSectionNavigation(sectionId) {
+    $('#section-navigation').empty();
+    if (!currentSectionData || !currentSectionData.course_id) return;
+
+    frappe.call({
+        method: 'bima_lms.api.course_sections.get_course_sections',
+        args: { course_id: currentSectionData.course_id },
+        callback: function(r) {
+            const sections = r.message || [];
+            const currentIndex = sections.findIndex(section => String(section.section_id) === String(sectionId));
+            
+            renderSectionNavigation(
+                currentIndex > 0 ? sections[currentIndex - 1] : null,
+                currentIndex >= 0 && currentIndex < sections.length - 1 ? sections[currentIndex + 1] : null
+            );
+        },
+        error: function() {
+            renderSectionNavigation(null, null);
+        }
+    });
+}
+
+function renderSectionNavigation(previousSection, nextSection) {
+    const $navigation = $('#section-navigation');
+    if (!$navigation.length) return;
+
+    // Menggunakan tag pembatas <div></div> agar flex justify-between menempatkan tombol Next tepat di posisi paling kanan
+    const prevHtml = previousSection ? `
+        <button type="button" class="section-nav-button pointer-events-auto group flex items-center gap-2 rounded-lg border border-gray-200 bg-white/95 px-3 py-3 text-gray-500 shadow-lg backdrop-blur transition-all hover:border-indigo-300 hover:text-indigo-600" data-section-id="${previousSection.section_id}" title="Sebelumnya: ${escapeHtml(previousSection.section_title)}" aria-label="Section sebelumnya: ${escapeHtml(previousSection.section_title)}">
+            <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+            <span class="hidden max-w-40 text-left text-xs font-semibold leading-tight group-hover:block">${escapeHtml(previousSection.section_title)}</span>
+        </button>` : '<div></div>';
+
+    const nextHtml = nextSection ? `
+        <button type="button" class="section-nav-button pointer-events-auto group flex items-center gap-2 rounded-lg border border-gray-200 bg-white/95 px-3 py-3 text-gray-500 shadow-lg backdrop-blur transition-all hover:border-indigo-300 hover:text-indigo-600" data-section-id="${nextSection.section_id}" title="Berikutnya: ${escapeHtml(nextSection.section_title)}" aria-label="Section berikutnya: ${escapeHtml(nextSection.section_title)}">
+            <span class="hidden max-w-40 text-left text-xs font-semibold leading-tight group-hover:block">${escapeHtml(nextSection.section_title)}</span>
+            <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+        </button>` : '<div></div>';
+
+    $navigation.html(prevHtml + nextHtml);
+
+    $navigation.find('.section-nav-button').off('click').on('click', function() {
+        const targetSectionId = $(this).data('section-id');
+
+        currentSectionId = targetSectionId;
+        activeQuiz = null;
+        quizCanAnswer = false;
+        quizResultVisible = false;
+        if (quizTimer) clearInterval(quizTimer);
+        quizTimer = null;
+        $('#quiz-modal').addClass('hidden');
+        loadSectionDetail(targetSectionId);
+
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
 }
 
 function bindGlobalEvents() {
@@ -1017,6 +1076,7 @@ function loadSectionDetail(section_id) {
     $('#section-loading').removeClass('hidden');
     $('#section-content').addClass('hidden');
     $('#section-action-buttons-wrapper').addClass('hidden');
+    $('#section-navigation').empty();
 
         frappe.call({
             method: 'bima_lms.api.section_details.get_section_detail',
@@ -1029,6 +1089,7 @@ function loadSectionDetail(section_id) {
             $('#section-loading').addClass('hidden');
             if (r.message) {
                 currentSectionData = r.message;
+                loadSectionNavigation(currentSectionId);
                 deletedLessonIds = [];
                 deletedAssignmentIds = [];
                 deletedQuizIds = [];
