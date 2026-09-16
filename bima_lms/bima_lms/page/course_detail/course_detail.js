@@ -599,6 +599,7 @@ function handleSaveCourse() {
     frappe.confirm(
         __('Apakah Anda yakin ingin menyimpan perubahan data course dan daftar bab ini?'),
         function() {
+            frappe.show_progress(__('Menyimpan Perubahan...'), 0, 100);
             const courseUpdateArgs = {
                 course_id: currentCourseData.course_id,
                 course_title: title,
@@ -628,8 +629,8 @@ function handleSaveCourse() {
                                 deleted_section_ids: JSON.stringify(deletedSectionIds)
                             },
                             callback: function(secRes) {
-                                frappe.hide_progress();
                                 if (secRes.message && secRes.message.status === 'success') {
+                                    frappe.show_progress(__('Menyimpan Perubahan...'), 100, 100, null, true);
                                     frappe.show_alert({ message: __('Course dan bab berhasil diperbarui'), indicator: 'green' });
                                     
                                     if (window.CourseSectionComponent && typeof window.CourseSectionComponent.setEditMode === 'function') {

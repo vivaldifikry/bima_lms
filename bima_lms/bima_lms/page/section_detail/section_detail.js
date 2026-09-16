@@ -306,20 +306,12 @@ function bindGlobalEvents() {
     // Navigation & Back Handlers
     $(document).off('click', '#btn-back-to-course').on('click', '#btn-back-to-course', function(e) {
         e.preventDefault();
-        if (currentSectionData && currentSectionData.course_id) {
-            frappe.set_route('course-detail', { id: currentSectionData.course_id });
-        } else {
-            frappe.set_route('courses');
-        }
+        navigateToCourseDetail();
     });
 
     $(document).off('click', '#breadcrumb-course').on('click', '#breadcrumb-course', function(e) {
         e.preventDefault();
-        if (currentSectionData && currentSectionData.course_id) {
-            frappe.set_route('course-detail', { id: currentSectionData.course_id });
-        } else {
-            frappe.set_route('courses');
-        }
+        navigateToCourseDetail();
     });
 
     // Tab Switching Handler
@@ -706,7 +698,7 @@ function bindGlobalEvents() {
     });
 
     if (!window.__sectionQuizPopstateBound) {
-        window.addEventListener('popstate', handleQuizForcedExit);
+        window.addEventListener('popstate', handleSectionPopState);
         window.addEventListener('beforeunload', function(event) {
             if (activeQuiz && !quizResultVisible) {
                 event.preventDefault();
@@ -1675,4 +1667,29 @@ function saveQuizEdit() {
             renderQuizQuestion();
         }
     });
+}
+
+function navigateToCourseDetail() {
+    if (currentSectionData && currentSectionData.course_id) {
+        frappe.set_route('course-detail', { id: currentSectionData.course_id });
+    } else {
+        frappe.set_route('courses');
+    }
+}
+
+function handleSectionPopState(event) {
+    if (activeQuiz && quizCanAnswer && !quizResultVisible) {
+        handleQuizForcedExit(event);
+        return;
+    }
+
+    if (!currentSectionData || !currentSectionData.course_id) return;
+
+    setTimeout(function() {
+        const route = frappe.get_route();
+        const routeCourseId = route[1] && typeof route[1] === 'object' ? route[1].id : route[1];
+        if (route[0] !== 'course-detail' || String(routeCourseId) !== String(currentSectionData.course_id)) {
+            navigateToCourseDetail();
+        }
+    }, 0);
 }
