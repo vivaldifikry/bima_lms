@@ -1302,31 +1302,36 @@ def save_course_rombels(course_id, rombel_ids=None):
 @frappe.whitelist()
 def get_create_course_context():
     """
-    Mengembalikan role akses user serta daftar guru aktif (role_id = 7) dari auth.users.
+    Mengembalikan role akses user serta daftar guru aktif dari auth.users.
     """
     current_user_email = frappe.session.user
-    user_roles = frappe.get_roles(current_user_email) or []
     
-    is_builtin_admin = current_user_email == "Administrator"
-    is_admin = is_builtin_admin or any(r in user_roles for r in ["Administrator", "Admin", "LMS Admin", "System Manager"])
-    is_teacher = "LMS Teacher" in user_roles
-    
+    # Bawaan Administrator Frappe ditolak
+    if current_user_email == "Administrator":
+        return {
+            "has_access": False,
+            "is_admin": False,
+            "is_teacher": False,
+            "teachers": [],
+            "current_user": None
+        }
+
     conn = get_pg_connection()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            # Ambil detail user login dari auth.users
+            # 1. Ambil detail user login & role_id dari database PostgreSQL
             cur.execute("""
-                SELECT user_id, user_full_name 
-                FROM auth.users 
-                WHERE LOWER(TRIM(user_email)) = LOWER(TRIM(%s)) 
-                  AND COALESCE(is_deleted, false) = false 
+                SELECT u.user_id, u.user_full_name, ARRAY_AGG(ur.role_id) AS roles
+                FROM auth.users u
+                LEFT JOIN auth.user_roles ur ON u.user_id = ur.user_id
+                WHERE LOWER(TRIM(u.user_email)) = LOWER(TRIM(%s)) 
+                  AND COALESCE(u.is_deleted, false) = false 
+                GROUP BY u.user_id, u.user_full_name
                 LIMIT 1;
             """, (current_user_email,))
             current_pg_user = cur.fetchone()
             
-            # Cek akses modal tambah course
-            has_access = is_builtin_admin or is_admin or is_teacher
-            if not has_access:
+            if not current_pg_user:
                 return {
                     "has_access": False,
                     "is_admin": False,
@@ -1334,11 +1339,26 @@ def get_create_course_context():
                     "teachers": [],
                     "current_user": None
                 }
+
+            user_roles = current_pg_user.get("roles") or []
             
-            # Ambil daftar guru (hanya role_id = 7) jika admin yang login
+            # Cek role berdasarkan database PG (misal: Admin = role_id 1, Guru = role_id 7)
+            is_admin = 1 in user_roles   # Sesuaikan 1 dengan ID Role Admin DB Anda
+            is_teacher = 7 in user_roles # ID Role Guru DB
+            
+            has_access = is_admin or is_teacher
+            if not has_access:
+                return {
+                    "has_access": False,
+                    "is_admin": False,
+                    "is_teacher": False,
+                    "teachers": [],
+                    "current_user": current_pg_user
+                }
+            
+            # 2. Ambil daftar guru (role_id = 7) jika user yang login adalah Admin DB
             teachers = []
-            if is_admin or is_builtin_admin:
-                # Query JOIN ke auth.user_roles (atau auth.users_roles) dengan filter role_id = 7
+            if is_admin:
                 cur.execute("""
                     SELECT DISTINCT u.user_id, u.user_full_name 
                     FROM auth.users u
@@ -1351,7 +1371,7 @@ def get_create_course_context():
                 
             return {
                 "has_access": True,
-                "is_admin": is_admin or is_builtin_admin,
+                "is_admin": is_admin,
                 "is_teacher": is_teacher,
                 "teachers": teachers,
                 "current_user": current_pg_user
@@ -1365,6 +1385,11 @@ def create_course(course_title, category_id, short_description, instructor_id=No
     """
     Menyimpan course baru ke tabel lms.courses.
     """
+    # Security Gate: Administrator Frappe tidak boleh membuat course
+    current_user_email = frappe.session.user
+    if current_user_email == "Administrator":
+        frappe.throw("Administrator tidak memiliki akses untuk menambah course.", frappe.PermissionError)
+
     if not course_title or len(course_title.strip()) < 3:
         frappe.throw("Judul course minimal 3 karakter.")
     if not category_id:
@@ -1372,24 +1397,17 @@ def create_course(course_title, category_id, short_description, instructor_id=No
     if not short_description or len(short_description.strip()) < 3:
         frappe.throw("Deskripsi singkat minimal 3 karakter.")
 
-    current_user_email = frappe.session.user
-    user_roles = frappe.get_roles(current_user_email) or []
-    is_builtin_admin = current_user_email == "Administrator"
-    is_admin = is_builtin_admin or any(r in user_roles for r in ["Administrator", "Admin", "LMS Admin", "System Manager"])
-    is_teacher = "LMS Teacher" in user_roles
-
-    if not (is_admin or is_teacher):
-        frappe.throw("Anda tidak memiliki akses untuk menambah course.", frappe.PermissionError)
-
     conn = get_pg_connection()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            # 1. Ambil user_id numerik (bigint) user login dari auth.users
+            # 1. Ambil user_id numerik & role_id dari auth.users
             cur.execute("""
-                SELECT user_id 
-                FROM auth.users 
-                WHERE LOWER(TRIM(user_email)) = LOWER(TRIM(%s)) 
-                  AND COALESCE(is_deleted, false) = false 
+                SELECT u.user_id, ARRAY_AGG(ur.role_id) AS roles
+                FROM auth.users u
+                LEFT JOIN auth.user_roles ur ON u.user_id = ur.user_id
+                WHERE LOWER(TRIM(u.user_email)) = LOWER(TRIM(%s)) 
+                  AND COALESCE(u.is_deleted, false) = false 
+                GROUP BY u.user_id
                 LIMIT 1;
             """, (current_user_email,))
             pg_user = cur.fetchone()
@@ -1397,29 +1415,33 @@ def create_course(course_title, category_id, short_description, instructor_id=No
             if not pg_user or not pg_user.get("user_id"):
                 frappe.throw("User login tidak ditemukan di database auth.users.")
                 
+            user_roles = pg_user.get("roles") or []
+            is_admin = 1 in user_roles   # Sesuaikan 1 dengan ID Role Admin DB Anda
+            is_teacher = 7 in user_roles # ID Role Guru DB
+
+            if not (is_admin or is_teacher):
+                frappe.throw("Anda tidak memiliki akses untuk menambah course.", frappe.PermissionError)
+
             current_pg_user_id = pg_user["user_id"]
 
             # 2. Penentuan instructor_id
             final_instructor_id = None
             if is_admin:
-                # Jika admin, gunakan instructor_id yang dipilih dari dialog dropdown
                 if instructor_id:
                     final_instructor_id = int(instructor_id)
                 else:
-                    # Fallback jika admin tidak memilih, gunakan user_id admin sendiri
                     final_instructor_id = current_pg_user_id
             else:
-                # Jika Guru (Teacher), otomatis gunakan user_id numerik dari user yang sedang login
                 final_instructor_id = current_pg_user_id
 
             if not final_instructor_id:
                 frappe.throw("Instructor ID tidak valid.")
 
-            # Auto-generate course_code: 3 huruf pertama dari course_title (UPPERCASE)
+            # Auto-generate course_code
             clean_title = course_title.strip()
             course_code = clean_title[:3].upper()
 
-            # 3. Generate course_id baru dengan alias 'new_id' eksplisit
+            # 3. Generate course_id baru
             cur.execute("SELECT pg_advisory_xact_lock(hashtext('lms.courses.course_id'))")
             cur.execute("SELECT COALESCE(MAX(course_id), 0) + 1 AS new_id FROM lms.courses")
             row_id = cur.fetchone()

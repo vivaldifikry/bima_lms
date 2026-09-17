@@ -1003,6 +1003,12 @@ let createCourseContext = null;
 
 // Dipanggil saat halaman diinisialisasi untuk mengecek hak akses tombol + Tambah Course
 function checkAddCoursePermission() {
+    if (frappe.session && frappe.session.user === 'Administrator') {
+        createCourseContext = { has_access: false };
+        $('#btn-add-course').addClass('hidden');
+        return;
+    }
+    
     frappe.call({
         method: 'bima_lms.api.courses.get_create_course_context',
         callback: function(r) {
