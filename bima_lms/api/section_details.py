@@ -8,8 +8,49 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import psycopg2.extras
 from bima_lms.api.courses import get_pg_connection, get_current_user_id, update_course_total_lessons
+import boto3
+from botocore.client import Config
 
 WIB = ZoneInfo("Asia/Jakarta")
+
+# Konfigurasi MinIO
+MINIO_CONFIG = {
+    "ACCESS_KEY": "ppdb-apps-development-user",
+    "SECRET_KEY": "eSBYo7g5bHP10SdDCVXJZ2wFnUlmKLjY",
+    "ENDPOINT_URL": "https://minio.cloudias79.com/",
+    "BUCKET_NAME": "ppdb-apps-development",
+    "REGION": "ap-southeast-1"
+}
+
+def get_minio_client():
+    """Membuat instance client boto3 S3 untuk MinIO"""
+    return boto3.client(
+        's3',
+        endpoint_url=MINIO_CONFIG["ENDPOINT_URL"],
+        aws_access_key_id=MINIO_CONFIG["ACCESS_KEY"],
+        aws_secret_access_key=MINIO_CONFIG["SECRET_KEY"],
+        config=Config(signature_version='s3v4'),
+        region_name=MINIO_CONFIG["REGION"]
+    )
+
+def generate_minio_presigned_url(object_name, expires_in=3600):
+    """Generates a presigned URL to view/download private MinIO objects."""
+    if not object_name:
+        return ""
+    # Jika object_name merupakan URL legacy Frappe/lokal, return langsung
+    if object_name.startswith(("/files/", "/private/files/", "http://", "https://")):
+        return object_name
+    try:
+        s3_client = get_minio_client()
+        url = s3_client.generate_presigned_url(
+            'get_object',
+            Params={'Bucket': MINIO_CONFIG["BUCKET_NAME"], 'Key': object_name},
+            ExpiresIn=expires_in
+        )
+        return url
+    except Exception as e:
+        frappe.logger("bima_lms").error(f"Error generating presigned URL for {object_name}: {str(e)}")
+        return ""
 
 
 def as_wib_iso(value):
@@ -233,8 +274,40 @@ def get_section_detail(section_id, active_student_id=None):
                 "lesson_code": lesson["lesson_code"] or ""
             })
 
+        # for assignment in assignments:
+        #     parent_submission = submissions.get(assignment["assignment_id"]) if is_parent else {}
+        #     result["assignments"].append({
+        #         "assignment_id": assignment["assignment_id"],
+        #         "course_id": assignment["course_id"],
+        #         "section_id": assignment["section_id"],
+        #         "title": assignment["title"] or "Tanpa Judul",
+        #         "instructions": assignment["instructions"] or "",
+        #         "attachment_url": assignment["attachment_url"] or "",
+        #         "display_order": assignment["display_order"],
+        #         "deadline": assignment["deadline"].isoformat() if assignment["deadline"] else None,
+        #         "max_score": float(assignment["max_score"]) if assignment["max_score"] is not None else 100.0,
+        #         "submitted_at": as_wib_iso((parent_submission or {}).get("submitted_at")),
+        #         "submission_file_path": (parent_submission or {}).get("file_path"),
+        #         "score": float(parent_submission["score"]) if parent_submission and parent_submission["score"] is not None else None,
+        #         "feedback_notes": (parent_submission or {}).get("feedback_notes") or "",
+        #         "submissions": [
+        #             {
+        #                 "submission_id": submission["submission_id"],
+        #                 "student_name": submission["student_name"] or "Tanpa Nama",
+        #                 "nisn": submission["nisn"] or "-",
+        #                 "submitted_at": as_wib_iso(submission["submitted_at"]),
+        #                 "file_path": submission["file_path"],
+        #                 "score": float(submission["score"]) if submission["score"] is not None else None,
+        #                 "feedback_notes": submission["feedback_notes"] or ""
+        #             }
+        #             for submission in (submissions.get(assignment["assignment_id"]) or [])
+        #         ] if is_teacher else []
+        #     })
+
         for assignment in assignments:
             parent_submission = submissions.get(assignment["assignment_id"]) if is_parent else {}
+            parent_file_path = (parent_submission or {}).get("file_path")
+            
             result["assignments"].append({
                 "assignment_id": assignment["assignment_id"],
                 "course_id": assignment["course_id"],
@@ -246,7 +319,7 @@ def get_section_detail(section_id, active_student_id=None):
                 "deadline": assignment["deadline"].isoformat() if assignment["deadline"] else None,
                 "max_score": float(assignment["max_score"]) if assignment["max_score"] is not None else 100.0,
                 "submitted_at": as_wib_iso((parent_submission or {}).get("submitted_at")),
-                "submission_file_path": (parent_submission or {}).get("file_path"),
+                "submission_file_path": generate_minio_presigned_url(parent_file_path) if parent_file_path else None,
                 "score": float(parent_submission["score"]) if parent_submission and parent_submission["score"] is not None else None,
                 "feedback_notes": (parent_submission or {}).get("feedback_notes") or "",
                 "submissions": [
@@ -255,7 +328,7 @@ def get_section_detail(section_id, active_student_id=None):
                         "student_name": submission["student_name"] or "Tanpa Nama",
                         "nisn": submission["nisn"] or "-",
                         "submitted_at": as_wib_iso(submission["submitted_at"]),
-                        "file_path": submission["file_path"],
+                        "file_path": generate_minio_presigned_url(submission["file_path"]),
                         "score": float(submission["score"]) if submission["score"] is not None else None,
                         "feedback_notes": submission["feedback_notes"] or ""
                     }
@@ -313,34 +386,138 @@ def get_section_detail(section_id, active_student_id=None):
 
 
 @frappe.whitelist()
-def rename_uploaded_file(file_path):
-    """Rename an uploaded Frappe file with a unique WIB timestamp."""
-    if not file_path or not file_path.startswith(("/files/", "/private/files/")):
-        frappe.throw("Lokasi file tidak valid.", frappe.ValidationError)
+def submit_assignment_minio(assignment_id, student_id, file_name, file_data):
+    """
+    Upload file PDF langsung ke MinIO dengan format penamaan nama_timestamp.pdf
+    dan simpan nama object MinIO ke database PostgreSQL.
+    """
+    if not assignment_id or not student_id or not file_data or not file_name:
+        frappe.throw("Parameter tugas, siswa, dan file wajib diisi.", frappe.MandatoryError)
 
-    file_doc = frappe.db.get_value(
-        "File", {"file_url": file_path}, ["name", "file_name", "is_private", "owner"], as_dict=True
-    )
-    if not file_doc or file_doc.owner != frappe.session.user:
-        frappe.throw("File tidak ditemukan atau tidak dapat diubah.", frappe.PermissionError)
-
-    original_name = os.path.basename(file_doc.file_name or file_path.rsplit("/", 1)[-1])
-    stem, extension = os.path.splitext(original_name)
-    if extension.lower() != ".pdf":
+    if not str(file_name).lower().endswith(".pdf"):
         frappe.throw("File jawaban harus berformat PDF.", frappe.ValidationError)
 
-    timestamp = datetime.now(WIB).strftime("%Y%m%d_%H%M%S_%f")
-    new_name = f"{stem}_{timestamp}{extension.lower()}"
-    base_path = frappe.get_site_path("private" if file_doc.is_private else "public", "files")
-    old_path = os.path.join(base_path, os.path.basename(file_path))
-    new_path = os.path.join(base_path, new_name)
-    if not os.path.isfile(old_path):
-        frappe.throw("File hasil upload tidak ditemukan.", frappe.DoesNotExistError)
+    import base64
+    try:
+        # Format penamaan file: (current_file_name_timestamp)
+        original_stem, ext = os.path.splitext(file_name)
+        timestamp = datetime.now(WIB).strftime("%Y%m%d_%H%M%S_%f")
 
-    shutil.move(old_path, new_path)
-    new_url = f"/private/files/{new_name}" if file_doc.is_private else f"/files/{new_name}"
-    frappe.db.set_value("File", file_doc.name, {"file_name": new_name, "file_url": new_url})
-    return {"file_url": new_url, "file_name": new_name}
+        # Tambahkan prefix folder 'lms_assignments/' di sini
+        minio_object_name = f"lms_assignments/{original_stem}_{timestamp}{ext.lower()}"
+
+        # Decode base64 file data dari client
+        if "," in file_data:
+            file_data = file_data.split(",")[1]
+        file_bytes = base64.b64decode(file_data)
+
+        # Upload ke MinIO Bucket
+        s3_client = get_minio_client()
+        s3_client.put_object(
+            Bucket=MINIO_CONFIG["BUCKET_NAME"],
+            Key=minio_object_name,
+            Body=file_bytes,
+            ContentType='application/pdf'
+        )
+    except Exception as e:
+        frappe.logger("bima_lms").error(f"Error upload to MinIO: {str(e)}")
+        frappe.throw(f"Gagal mengunggah file ke MinIO: {str(e)}")
+
+    conn = get_pg_connection()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT 1
+                FROM auth.parent_student_relations psr
+                JOIN auth.users pu ON pu.user_id = psr.parent_user_id
+                WHERE pu.user_email = %s AND psr.student_user_id = %s
+                LIMIT 1
+            """, (frappe.session.user, student_id))
+            if not cur.fetchone():
+                frappe.throw("Akun anak tidak valid untuk pengguna ini.", frappe.PermissionError)
+
+            cur.execute("""
+                SELECT a.assignment_id, a.deadline
+                FROM lms.assignments a
+                WHERE a.assignment_id = %s AND a.is_deleted = false
+                FOR UPDATE
+            """, (assignment_id,))
+            assignment = cur.fetchone()
+            if not assignment:
+                frappe.throw("Tugas tidak ditemukan.", frappe.DoesNotExistError)
+
+            cur.execute("""
+                SELECT submission_id, submitted_at
+                FROM lms.assignment_submissions
+                WHERE assignment_id = %s AND student_id = %s
+                LIMIT 1
+            """, (assignment_id, student_id))
+            existing = cur.fetchone()
+            if existing:
+                return {
+                    "status": "already_submitted",
+                    "submitted_at": as_wib_iso(existing["submitted_at"])
+                }
+
+            # Simpan nama object MinIO ke kolom file_path database
+            cur.execute("""
+                INSERT INTO lms.assignment_submissions
+                    (assignment_id, student_id, file_path, submitted_at, is_late,
+                     score, feedback_notes, graded_by, graded_at)
+                VALUES (%s, %s, %s, NOW() AT TIME ZONE 'Asia/Jakarta',
+                    (%s IS NOT NULL AND (NOW() AT TIME ZONE 'Asia/Jakarta') > %s),
+                    NULL, NULL, NULL, NULL)
+                RETURNING submission_id, submitted_at
+            """, (
+                assignment_id,
+                student_id,
+                minio_object_name,
+                assignment["deadline"],
+                assignment["deadline"]
+            ))
+            submission = cur.fetchone()
+        conn.commit()
+        return {
+            "status": "success",
+            "submission_id": submission["submission_id"],
+            "submitted_at": as_wib_iso(submission["submitted_at"])
+        }
+    except Exception as e:
+        conn.rollback()
+        frappe.logger("bima_lms").error(f"Error submit_assignment_minio: {str(e)}")
+        frappe.throw(f"Gagal mengumpulkan tugas: {str(e)}")
+    finally:
+        conn.close()
+
+# @frappe.whitelist()
+# def rename_uploaded_file(file_path):
+#     """Rename an uploaded Frappe file with a unique WIB timestamp."""
+#     if not file_path or not file_path.startswith(("/files/", "/private/files/")):
+#         frappe.throw("Lokasi file tidak valid.", frappe.ValidationError)
+
+#     file_doc = frappe.db.get_value(
+#         "File", {"file_url": file_path}, ["name", "file_name", "is_private", "owner"], as_dict=True
+#     )
+#     if not file_doc or file_doc.owner != frappe.session.user:
+#         frappe.throw("File tidak ditemukan atau tidak dapat diubah.", frappe.PermissionError)
+
+#     original_name = os.path.basename(file_doc.file_name or file_path.rsplit("/", 1)[-1])
+#     stem, extension = os.path.splitext(original_name)
+#     if extension.lower() != ".pdf":
+#         frappe.throw("File jawaban harus berformat PDF.", frappe.ValidationError)
+
+#     timestamp = datetime.now(WIB).strftime("%Y%m%d_%H%M%S_%f")
+#     new_name = f"{stem}_{timestamp}{extension.lower()}"
+#     base_path = frappe.get_site_path("private" if file_doc.is_private else "public", "files")
+#     old_path = os.path.join(base_path, os.path.basename(file_path))
+#     new_path = os.path.join(base_path, new_name)
+#     if not os.path.isfile(old_path):
+#         frappe.throw("File hasil upload tidak ditemukan.", frappe.DoesNotExistError)
+
+#     shutil.move(old_path, new_path)
+#     new_url = f"/private/files/{new_name}" if file_doc.is_private else f"/files/{new_name}"
+#     frappe.db.set_value("File", file_doc.name, {"file_name": new_name, "file_url": new_url})
+#     return {"file_url": new_url, "file_name": new_name}
 
 
 @frappe.whitelist()

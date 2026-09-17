@@ -669,6 +669,47 @@ function bindGlobalEvents() {
         $input.val('');
     });
 
+    // $(document).off('click', '.btn-upload-assignment').on('click', '.btn-upload-assignment', function() {
+    //     const assignmentId = $(this).data('assignment-id');
+    //     const studentId = window.StudentSwitcher ? window.StudentSwitcher.getActiveStudentId() : null;
+    //     if (!studentId) {
+    //         frappe.msgprint(__('Silakan pilih akun anak terlebih dahulu.'));
+    //         return;
+    //     }
+
+    //     new frappe.ui.FileUploader({
+    //         restrictions: { allowed_file_types: ['.pdf'] },
+    //         on_success: function(file) {
+    //             frappe.call({
+    //                 method: 'bima_lms.api.section_details.rename_uploaded_file',
+    //                 args: { file_path: file.file_url },
+    //                 callback: function(renameResponse) {
+    //                     if (!renameResponse.message || !renameResponse.message.file_url) return;
+    //                     frappe.call({
+    //                         method: 'bima_lms.api.section_details.submit_assignment',
+    //                         args: {
+    //                             assignment_id: assignmentId,
+    //                             student_id: studentId,
+    //                             file_path: renameResponse.message.file_url
+    //                         },
+    //                         freeze: true,
+    //                         freeze_message: __('Mengumpulkan jawaban...'),
+    //                         callback: function(response) {
+    //                             if (response.message && response.message.status === 'success') {
+    //                                 frappe.show_alert({ message: __('Jawaban berhasil dikumpulkan'), indicator: 'green' });
+    //                                 loadSectionDetail(currentSectionId);
+    //                             } else if (response.message && response.message.status === 'already_submitted') {
+    //                                 frappe.msgprint(__('Tugas ini sudah dikumpulkan sebelumnya.'));
+    //                                 loadSectionDetail(currentSectionId);
+    //                             }
+    //                         }
+    //                     });
+    //                 }
+    //             });
+    //         }
+    //     });
+    // });
+
     $(document).off('click', '.btn-upload-assignment').on('click', '.btn-upload-assignment', function() {
         const assignmentId = $(this).data('assignment-id');
         const studentId = window.StudentSwitcher ? window.StudentSwitcher.getActiveStudentId() : null;
@@ -677,37 +718,49 @@ function bindGlobalEvents() {
             return;
         }
 
-        new frappe.ui.FileUploader({
-            restrictions: { allowed_file_types: ['.pdf'] },
-            on_success: function(file) {
+        // Buat input file tersembunyi khusus PDF
+        const fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.accept = '.pdf,application/pdf';
+
+        fileInput.onchange = function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+                frappe.msgprint(__('File jawaban harus berformat PDF.'));
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = function(uploadEvent) {
+                const base64Data = uploadEvent.target.result;
+                
                 frappe.call({
-                    method: 'bima_lms.api.section_details.rename_uploaded_file',
-                    args: { file_path: file.file_url },
-                    callback: function(renameResponse) {
-                        if (!renameResponse.message || !renameResponse.message.file_url) return;
-                        frappe.call({
-                            method: 'bima_lms.api.section_details.submit_assignment',
-                            args: {
-                                assignment_id: assignmentId,
-                                student_id: studentId,
-                                file_path: renameResponse.message.file_url
-                            },
-                            freeze: true,
-                            freeze_message: __('Mengumpulkan jawaban...'),
-                            callback: function(response) {
-                                if (response.message && response.message.status === 'success') {
-                                    frappe.show_alert({ message: __('Jawaban berhasil dikumpulkan'), indicator: 'green' });
-                                    loadSectionDetail(currentSectionId);
-                                } else if (response.message && response.message.status === 'already_submitted') {
-                                    frappe.msgprint(__('Tugas ini sudah dikumpulkan sebelumnya.'));
-                                    loadSectionDetail(currentSectionId);
-                                }
-                            }
-                        });
+                    method: 'bima_lms.api.section_details.submit_assignment_minio',
+                    args: {
+                        assignment_id: assignmentId,
+                        student_id: studentId,
+                        file_name: file.name,
+                        file_data: base64Data
+                    },
+                    freeze: true,
+                    freeze_message: __('Mengunggah file ke MinIO & mengumpulkan jawaban...'),
+                    callback: function(response) {
+                        if (response.message && response.message.status === 'success') {
+                            frappe.show_alert({ message: __('Jawaban berhasil dikumpulkan'), indicator: 'green' });
+                            loadSectionDetail(currentSectionId);
+                        } else if (response.message && response.message.status === 'already_submitted') {
+                            frappe.msgprint(__('Tugas ini sudah dikumpulkan sebelumnya.'));
+                            loadSectionDetail(currentSectionId);
+                        }
                     }
                 });
-            }
-        });
+            };
+            reader.readAsDataURL(file);
+        };
+
+        fileInput.click();
     });
 
     $(document).off('input', '.input-submission-score').on('input', '.input-submission-score', function() {
