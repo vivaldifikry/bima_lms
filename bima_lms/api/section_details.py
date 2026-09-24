@@ -599,6 +599,119 @@ def submit_assignment(assignment_id, file_path, student_id=None):
 
 
 @frappe.whitelist()
+def get_temp_quiz_answers(quiz_id, student_id):
+    """Ambil jawaban sementara quiz untuk siswa aktif yang dipilih orang tua."""
+    if not quiz_id or not student_id:
+        frappe.throw("Quiz dan akun anak wajib diisi.", frappe.MandatoryError)
+
+    user_roles = frappe.get_roles(frappe.session.user)
+    if frappe.session.user == "Administrator" or "LMS Parent" not in user_roles:
+        frappe.throw("Hanya orang tua yang dapat mengakses jawaban sementara quiz.", frappe.PermissionError)
+
+    conn = get_pg_connection()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT 1
+                FROM auth.parent_student_relations psr
+                JOIN auth.users pu ON pu.user_id = psr.parent_user_id
+                WHERE pu.user_email = %s AND psr.student_user_id = %s
+                LIMIT 1
+            """, (frappe.session.user, student_id))
+            if not cur.fetchone():
+                frappe.throw("Akun anak tidak valid untuk pengguna ini.", frappe.PermissionError)
+
+            cur.execute("""
+                SELECT question_id, option_id, remaining_time, updated_at
+                FROM lms.temp_quiz_answer
+                WHERE quiz_id = %s AND student_id = %s
+                ORDER BY updated_at DESC, question_id ASC
+            """, (quiz_id, student_id))
+            rows = cur.fetchall()
+
+            if not rows:
+                return {"status": "not_found", "answers": {}, "remaining_time": 0}
+
+            remaining_time = int(rows[0]["remaining_time"] or 0)
+            answers = {}
+            for row in rows:
+                if row["question_id"] is not None and row["option_id"] is not None:
+                    answers[int(row["question_id"])] = int(row["option_id"])
+
+            return {
+                "status": "success",
+                "answers": answers,
+                "remaining_time": remaining_time,
+                "updated_at": as_wib_iso(rows[0]["updated_at"])
+            }
+    finally:
+        conn.close()
+
+
+@frappe.whitelist()
+def save_temp_quiz_answers(quiz_id, student_id, answers=None, remaining_time=0):
+    """Simpan jawaban sementara quiz untuk siswa aktif milik orang tua."""
+    if not quiz_id or not student_id:
+        frappe.throw("Quiz dan akun anak wajib diisi.", frappe.MandatoryError)
+
+    try:
+        answers = json.loads(answers) if isinstance(answers, str) else (answers or {})
+        answers = {int(question_id): int(option_id) for question_id, option_id in answers.items() if option_id}
+    except (TypeError, ValueError, json.JSONDecodeError):
+        frappe.throw("Format jawaban quiz tidak valid.", frappe.ValidationError)
+
+    user_roles = frappe.get_roles(frappe.session.user)
+    if frappe.session.user == "Administrator" or "LMS Parent" not in user_roles:
+        frappe.throw("Hanya orang tua yang dapat menyimpan jawaban sementara quiz.", frappe.PermissionError)
+
+    conn = get_pg_connection()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT 1
+                FROM auth.parent_student_relations psr
+                JOIN auth.users pu ON pu.user_id = psr.parent_user_id
+                WHERE pu.user_email = %s AND psr.student_user_id = %s
+                LIMIT 1
+            """, (frappe.session.user, student_id))
+            if not cur.fetchone():
+                frappe.throw("Akun anak tidak valid untuk pengguna ini.", frappe.PermissionError)
+
+            cur.execute("""
+                SELECT quiz_id
+                FROM lms.quizzes
+                WHERE quiz_id = %s AND is_deleted = false
+                LIMIT 1
+            """, (quiz_id,))
+            if not cur.fetchone():
+                frappe.throw("Quiz tidak ditemukan.", frappe.DoesNotExistError)
+
+            cur.execute("""
+                DELETE FROM lms.temp_quiz_answer
+                WHERE quiz_id = %s AND student_id = %s
+            """, (quiz_id, student_id))
+
+            if answers:
+                rows = []
+                for question_id, option_id in answers.items():
+                    rows.append((int(quiz_id), int(student_id), int(question_id), int(option_id), int(remaining_time or 0), datetime.now(WIB)))
+                cur.executemany("""
+                    INSERT INTO lms.temp_quiz_answer
+                        (quiz_id, student_id, question_id, option_id, remaining_time, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, rows)
+
+        conn.commit()
+        return {"status": "success", "message": "Jawaban sementara berhasil disimpan."}
+    except Exception as e:
+        conn.rollback()
+        frappe.logger("bima_lms").error(f"Error save_temp_quiz_answers: {str(e)}")
+        frappe.throw(f"Gagal menyimpan jawaban sementara quiz: {str(e)}")
+    finally:
+        conn.close()
+
+
+@frappe.whitelist()
 def submit_quiz_attempt(quiz_id, student_id, answers=None):
     """Calculate and persist one quiz attempt for the active child account."""
     if not quiz_id or not student_id:
@@ -696,6 +809,18 @@ def submit_quiz_attempt(quiz_id, student_id, answers=None):
                       points_earned, is_correct))
 
         conn.commit()
+        
+        # Setelah conn.commit() sukses di submit_quiz_attempt, tambahkan:
+        try:
+            with conn.cursor() as cleanup_cur:
+                cleanup_cur.execute("""
+                    DELETE FROM lms.temp_quiz_answer
+                    WHERE quiz_id = %s AND student_id = %s
+                """, (quiz_id, student_id))
+            conn.commit()
+        except Exception as cleanup_err:
+            frappe.logger("bima_lms").warning(f"Gagal hapus draft quiz: {str(cleanup_err)}")
+            
         return {
             "status": "success",
             "attempt_id": attempt["attempt_id"],

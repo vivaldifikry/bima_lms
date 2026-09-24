@@ -237,6 +237,7 @@ function getPageHTML() {
                                 </div>
                                 <div id="quiz-footer-right" class="flex items-center gap-2">
                                     <button id="btn-quiz-next" type="button" class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700">Berikutnya</button>
+                                    <button id="btn-quiz-save-temp" type="button" class="hidden rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-700 hover:bg-amber-100">Simpan Jawaban Sementara</button>
                                     <button id="btn-quiz-submit" type="button" class="hidden rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">Submit Quiz</button>
                                     <button id="btn-quiz-close" type="button" class="hidden rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700">Tutup</button>
                                 </div>
@@ -378,6 +379,10 @@ function bindGlobalEvents() {
         e.preventDefault();
         const tab = $(this).data('tab');
         switchTab(tab);
+    });
+
+    $(document).off('click', '#btn-quiz-save-temp').on('click', '#btn-quiz-save-temp', function() {
+        saveTempQuizAnswers();
     });
 
     $(document).off('click', '.btn-open-quiz').on('click', '.btn-open-quiz', function() {
@@ -970,17 +975,65 @@ function startQuiz(quiz) {
     quizResultVisible = false;
     activeQuizQuestionIndex = 0;
     activeQuizAnswers = {};
-    quizDeadline = quizCanAnswer && quiz.duration_minutes ? Date.now() + quiz.duration_minutes * 60000 : null;
-    $('#btn-quiz-previous, #btn-quiz-next').removeClass('hidden');
-    $('#btn-quiz-submit, #btn-quiz-close, #btn-add-quiz-question, #btn-quiz-save-edit, #btn-quiz-cancel-edit').addClass('hidden');
-    $('#btn-quiz-previous').prop('disabled', false).removeClass('opacity-50');
-    $('#quiz-modal').removeClass('hidden');
-    $('#quiz-question-nav').removeClass('hidden');
-    history.pushState({ sectionQuiz: true }, '', window.location.href);
-    if (quizTimer) clearInterval(quizTimer);
-    quizTimer = quizDeadline ? setInterval(updateQuizTimer, 1000) : null;
-    updateQuizTimer();
-    renderQuizQuestion();
+
+    const resumeSavedDraft = function() {
+        $('#btn-quiz-previous, #btn-quiz-next').removeClass('hidden');
+        $('#btn-quiz-submit, #btn-quiz-close, #btn-add-quiz-question, #btn-quiz-save-edit, #btn-quiz-cancel-edit').addClass('hidden');
+        $('#btn-quiz-previous').prop('disabled', false).removeClass('opacity-50');
+        $('#quiz-modal').removeClass('hidden');
+        $('#quiz-question-nav').removeClass('hidden');
+        history.pushState({ sectionQuiz: true }, '', window.location.href);
+        if (quizTimer) clearInterval(quizTimer);
+        quizTimer = quizDeadline ? setInterval(updateQuizTimer, 1000) : null;
+        updateQuizTimer();
+        renderQuizQuestion();
+    };
+
+    if (!quizCanAnswer) {
+        quizDeadline = quiz.duration_minutes ? Date.now() + quiz.duration_minutes * 60000 : null;
+        resumeSavedDraft();
+        return;
+    }
+
+    const studentId = currentSectionData.active_student_id;
+    frappe.call({
+        method: 'bima_lms.api.section_details.get_temp_quiz_answers',
+        args: {
+            quiz_id: quiz.quiz_id,
+            student_id: studentId
+        },
+        callback: function(response) {
+            const data = response.message || {};
+            if (data && data.status === 'success' && data.answers) {
+                activeQuizAnswers = {};
+                Object.keys(data.answers).forEach(function(questionId) {
+                    const index = activeQuiz.questions.findIndex(function(question) {
+                        return String(question.question_id) === String(questionId);
+                    });
+                    if (index >= 0) {
+                        activeQuizAnswers[index] = Number(data.answers[questionId]);
+                    }
+                });
+                const remainingSeconds = Number(data.remaining_time || 0);
+                if (quiz.duration_minutes) {
+                    // Kalau ada batas waktu: pakai sisa waktu tersimpan, fallback ke durasi penuh
+                    quizDeadline = remainingSeconds > 0
+                        ? Date.now() + remainingSeconds * 1000
+                        : Date.now() + quiz.duration_minutes * 60000;
+                } else {
+                    quizDeadline = null;
+                }
+                frappe.show_alert({ message: __('Jawaban sementara berhasil dipulihkan.'), indicator: 'blue' });
+            } else {
+                quizDeadline = quiz.duration_minutes ? Date.now() + quiz.duration_minutes * 60000 : null;
+            }
+            resumeSavedDraft();
+        },
+        error: function() {
+            quizDeadline = quiz.duration_minutes ? Date.now() + quiz.duration_minutes * 60000 : null;
+            resumeSavedDraft();
+        }
+    });
 }
 
 function renderQuizQuestion() {
@@ -1023,6 +1076,7 @@ function renderQuizQuestion() {
     $('#btn-quiz-close').toggleClass('hidden', quizCanAnswer);
     $('#btn-quiz-edit').toggleClass('hidden', !currentSectionData.is_teacher);
     $('#btn-add-quiz-question, #btn-quiz-save-edit, #btn-quiz-cancel-edit').addClass('hidden');
+    $('#btn-quiz-save-temp').toggleClass('hidden', !quizCanAnswer);
     $('#btn-quiz-previous').removeClass('hidden').prop('disabled', activeQuizQuestionIndex === 0).toggleClass('opacity-50', activeQuizQuestionIndex === 0);
     $('#btn-quiz-next').toggleClass('hidden', activeQuizQuestionIndex === activeQuiz.questions.length - 1);
     $('#btn-quiz-submit').toggleClass('hidden', !quizCanAnswer || activeQuizQuestionIndex !== activeQuiz.questions.length - 1);
@@ -1043,6 +1097,7 @@ function closeQuizModal(reloadAfterClose = false) {
     if (quizTimer) clearInterval(quizTimer);
     quizTimer = null;
     $('#quiz-modal').addClass('hidden');
+    $('#btn-quiz-save-temp').addClass('hidden');
     $('#btn-quiz-close').addClass('hidden');
     $('#btn-add-quiz-question, #btn-quiz-save-edit, #btn-quiz-cancel-edit').addClass('hidden');
     $('#quiz-question-buttons').empty();
@@ -1073,6 +1128,44 @@ function updateQuizTimer() {
     }
 }
 
+function saveTempQuizAnswers() {
+    if (!activeQuiz || !quizCanAnswer) return;
+    if (!activeQuiz.quiz_id) {
+        frappe.msgprint(__('Quiz belum tersimpan. Simpan dulu quiz sebelum menyimpan jawaban sementara.'));
+        return;
+    }
+
+    const answers = {};
+    activeQuiz.questions.forEach(function(question, index) {
+        if (activeQuizAnswers[index] !== undefined && question.question_id) {
+            answers[question.question_id] = activeQuizAnswers[index];
+        }
+    });
+
+    const remainingSeconds = quizDeadline
+        ? Math.max(0, Math.ceil((quizDeadline - Date.now()) / 1000))
+        : 0;
+
+    frappe.call({
+        method: 'bima_lms.api.section_details.save_temp_quiz_answers',
+        args: {
+            quiz_id: activeQuiz.quiz_id,
+            student_id: currentSectionData.active_student_id,
+            answers: JSON.stringify(answers),
+            remaining_time: remainingSeconds
+        },
+        freeze: true,
+        freeze_message: __('Menyimpan jawaban sementara...'),
+        callback: function(response) {
+            if (!response.message || response.message.status !== 'success') {
+                frappe.msgprint(__('Gagal menyimpan jawaban sementara.'));
+                return;
+            }
+            frappe.show_alert({ message: __('Jawaban sementara berhasil disimpan.'), indicator: 'green' });
+        }
+    });
+}
+
 function submitQuizLocally(timeExpired) {
     if (!activeQuiz) return;
     const answers = {};
@@ -1100,6 +1193,7 @@ function submitQuizLocally(timeExpired) {
 function renderQuizResult(result, timeExpired) {
     const score = Number(result.total_score || 0);
     const passed = result.result_status === 'Lulus';
+    $('#btn-quiz-save-temp').addClass('hidden');
     $('#quiz-question-view').addClass('lg:col-span-2 flex items-center justify-center');
     $('#quiz-question-view').html(`<div class="w-full max-w-xl text-center">
         <p class="text-sm font-bold text-gray-600">${timeExpired ? 'Waktu pengerjaan habis.' : 'Quiz selesai.'}</p>
