@@ -60,7 +60,7 @@ function getPageHTML() {
                         </a>
                         <div class="h-4 w-px bg-gray-200"></div>
                         <nav class="flex items-center space-x-2 text-sm font-medium">
-                            <a href="/app/lms-dashboard" class="text-gray-500 hover:text-indigo-600 transition-colors">LMS Dashboard</a>
+                            <a href="/app" class="text-gray-500 hover:text-indigo-600 transition-colors">LMS Dashboard</a>
                             <span class="text-gray-300">/</span>
                             <a href="/app/courses" class="text-gray-500 hover:text-indigo-600 transition-colors">Courses</a>
                             <span class="text-gray-300">/</span>

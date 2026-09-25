@@ -177,7 +177,7 @@ frappe.pages['courses'].on_page_load = function(wrapper) {
                 <!-- Compact Navigation & Breadcrumb + Student Switcher Container -->
                 <div class="flex flex-wrap items-center justify-between gap-4">
                     <div class="flex items-center space-x-3 bg-white px-4 py-3 rounded-lg shadow-sm border border-gray-100 w-fit">
-                        <a href="/app/lms-dashboard" 
+                        <a href="/app" 
                            class="inline-flex items-center justify-center p-1.5 rounded-lg text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
                            title="Kembali ke LMS Dashboard">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -186,7 +186,7 @@ frappe.pages['courses'].on_page_load = function(wrapper) {
                         </a>
                         <div class="h-4 w-px bg-gray-200"></div>
                         <nav class="flex items-center space-x-2 text-sm font-medium">
-                            <a href="/app/lms-dashboard" class="text-gray-500 hover:text-indigo-600 transition-colors">LMS Dashboard</a>
+                            <a href="/app" class="text-gray-500 hover:text-indigo-600 transition-colors">LMS Dashboard</a>
                             <span class="text-gray-300">/</span>
                             <span class="text-gray-900 font-bold">Courses</span>
                         </nav>
