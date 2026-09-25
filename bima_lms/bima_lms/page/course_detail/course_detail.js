@@ -14,14 +14,15 @@ frappe.pages['course-detail'].on_page_load = function(wrapper) {
 
     $(page.body).html(`
         <div class="min-h-screen bg-gray-50/50 p-4 sm:p-6 lg:p-8">
-            <div class="max-w-7xl mx-auto space-y-6">
+            <!-- Menambahkan 'relative' agar tombol navigasi memiliki acuan posisi terhadap container card ini -->
+            <div class="relative max-w-7xl mx-auto space-y-6">
 
                 <!-- Header / Breadcrumb & Action Buttons -->
                 <div class="flex flex-wrap items-center justify-between gap-4">
                     <div class="flex items-center space-x-3 bg-white px-4 py-3 rounded-lg shadow-sm border border-gray-100 w-fit">
-                                <a href="/app/courses" 
+                        <a href="/app/courses" 
                            class="inline-flex items-center justify-center p-1.5 rounded-lg text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
-                                    title="Kembali ke Courses">
+                           title="Kembali ke Courses">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
                             </svg>
@@ -65,7 +66,8 @@ frappe.pages['course-detail'].on_page_load = function(wrapper) {
                     </div>
                 </div>
 
-                <div id="course-navigation" class="pointer-events-none fixed inset-y-0 left-0 right-0 z-40 flex items-center justify-between px-2 sm:px-4"></div>
+                <!-- Container Navigasi: Menggunakan sticky + pointer-events-none agar tetap melayang di tengah layar saat di-scroll dan ikut bergeser secara halus saat sidebar Frappe dibuka/ditutup -->
+                <div id="course-navigation" class="pointer-events-none sticky top-1/2 z-30 -translate-y-1/2 flex items-center justify-between w-full h-0"></div>
 
                 <!-- Loading State -->
                 <div id="detail-loading" class="flex items-center justify-center py-20">
@@ -303,18 +305,19 @@ function loadCourseNavigation(course_id) {
 }
 
 function renderCourseNavigation(previousCourse, nextCourse) {
-    const $navigation = $('#course-navigation');
+    const $navigation =$('#course-navigation');
     if (!$navigation.length) return;
 
-    // Tambahkan div kosong jika prev / next tidak ada agar flex justify-between menjaga posisi elemen tetap di kanan/kiri
+    // -translate-x-full -ml-4 menempatkan tombol persis di sebelah kiri luar card
     const prevHtml = previousCourse ? `
-        <button type="button" class="course-nav-button pointer-events-auto group flex items-center gap-2 rounded-lg border border-gray-200 bg-white/95 px-3 py-3 text-gray-500 shadow-lg backdrop-blur transition-all hover:border-indigo-300 hover:text-indigo-600" data-course-id="${previousCourse.course_id}" title="Sebelumnya: ${escapeHtml(previousCourse.course_title)}" aria-label="Course sebelumnya: ${escapeHtml(previousCourse.course_title)}">
+        <button type="button" class="course-nav-button pointer-events-auto group flex items-center gap-2 rounded-lg border border-gray-200 bg-white/95 p-3 text-gray-500 shadow-xl backdrop-blur transition-all hover:border-indigo-300 hover:text-indigo-600 -translate-x-full -ml-3 lg:-ml-5" data-course-id="${previousCourse.course_id}" title="Sebelumnya: ${escapeHtml(previousCourse.course_title)}" aria-label="Course sebelumnya: ${escapeHtml(previousCourse.course_title)}">
             <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
             <span class="hidden max-w-40 text-left text-xs font-semibold leading-tight group-hover:block">${escapeHtml(previousCourse.course_title)}</span>
         </button>` : '<div></div>';
 
+    // translate-x-full -mr-4 menempatkan tombol persis di sebelah kanan luar card
     const nextHtml = nextCourse ? `
-        <button type="button" class="course-nav-button pointer-events-auto group flex items-center gap-2 rounded-lg border border-gray-200 bg-white/95 px-3 py-3 text-gray-500 shadow-lg backdrop-blur transition-all hover:border-indigo-300 hover:text-indigo-600" data-course-id="${nextCourse.course_id}" title="Berikutnya: ${escapeHtml(nextCourse.course_title)}" aria-label="Course berikutnya: ${escapeHtml(nextCourse.course_title)}">
+        <button type="button" class="course-nav-button pointer-events-auto group flex items-center gap-2 rounded-lg border border-gray-200 bg-white/95 p-3 text-gray-500 shadow-xl backdrop-blur transition-all hover:border-indigo-300 hover:text-indigo-600 translate-x-full -mr-3 lg:-mr-5" data-course-id="${nextCourse.course_id}" title="Berikutnya: ${escapeHtml(nextCourse.course_title)}" aria-label="Course berikutnya: ${escapeHtml(nextCourse.course_title)}">
             <span class="hidden max-w-40 text-left text-xs font-semibold leading-tight group-hover:block">${escapeHtml(nextCourse.course_title)}</span>
             <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
         </button>` : '<div></div>';

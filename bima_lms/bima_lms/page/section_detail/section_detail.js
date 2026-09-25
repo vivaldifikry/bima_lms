@@ -50,7 +50,7 @@ function loadExternalLibraries() {
 function getPageHTML() {
     return `
         <div class="min-h-screen bg-gray-50/50 p-4 sm:p-6 lg:p-8">
-            <div class="max-w-7xl mx-auto space-y-6">
+            <div class="relative max-w-7xl mx-auto space-y-6">
 
                 <!-- Header / Breadcrumb -->
                 <div class="flex flex-wrap items-center justify-between gap-4">
@@ -88,7 +88,7 @@ function getPageHTML() {
                     </div>
                 </div>
 
-                <div id="section-navigation" class="pointer-events-none fixed inset-y-0 left-0 right-0 z-40 flex items-center justify-between px-2 sm:px-4"></div>
+                <div id="section-navigation" class="pointer-events-none sticky top-1/2 z-30 -translate-y-1/2 flex items-center justify-between w-full h-0"></div>
 
                 <!-- Loading State -->
                 <div id="section-loading" class="flex items-center justify-center py-20">
@@ -329,15 +329,16 @@ function renderSectionNavigation(previousSection, nextSection) {
     const $navigation = $('#section-navigation');
     if (!$navigation.length) return;
 
-    // Menggunakan tag pembatas <div></div> agar flex justify-between menempatkan tombol Next tepat di posisi paling kanan
+    // Posisi tombol persis di luar card kiri (translate + margin negatif), sama seperti course-detail
     const prevHtml = previousSection ? `
-        <button type="button" class="section-nav-button pointer-events-auto group flex items-center gap-2 rounded-lg border border-gray-200 bg-white/95 px-3 py-3 text-gray-500 shadow-lg backdrop-blur transition-all hover:border-indigo-300 hover:text-indigo-600" data-section-id="${previousSection.section_id}" title="Sebelumnya: ${escapeHtml(previousSection.section_title)}" aria-label="Section sebelumnya: ${escapeHtml(previousSection.section_title)}">
+        <button type="button" class="section-nav-button pointer-events-auto group flex items-center gap-2 rounded-lg border border-gray-200 bg-white/95 p-3 text-gray-500 shadow-xl backdrop-blur transition-all hover:border-indigo-300 hover:text-indigo-600 -translate-x-full -ml-3 lg:-ml-5" data-section-id="${previousSection.section_id}" title="Sebelumnya: ${escapeHtml(previousSection.section_title)}" aria-label="Section sebelumnya: ${escapeHtml(previousSection.section_title)}">
             <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
             <span class="hidden max-w-40 text-left text-xs font-semibold leading-tight group-hover:block">${escapeHtml(previousSection.section_title)}</span>
         </button>` : '<div></div>';
 
+    // Posisi tombol persis di luar card kanan, sama seperti course-detail
     const nextHtml = nextSection ? `
-        <button type="button" class="section-nav-button pointer-events-auto group flex items-center gap-2 rounded-lg border border-gray-200 bg-white/95 px-3 py-3 text-gray-500 shadow-lg backdrop-blur transition-all hover:border-indigo-300 hover:text-indigo-600" data-section-id="${nextSection.section_id}" title="Berikutnya: ${escapeHtml(nextSection.section_title)}" aria-label="Section berikutnya: ${escapeHtml(nextSection.section_title)}">
+        <button type="button" class="section-nav-button pointer-events-auto group flex items-center gap-2 rounded-lg border border-gray-200 bg-white/95 p-3 text-gray-500 shadow-xl backdrop-blur transition-all hover:border-indigo-300 hover:text-indigo-600 translate-x-full -mr-3 lg:-mr-5" data-section-id="${nextSection.section_id}" title="Berikutnya: ${escapeHtml(nextSection.section_title)}" aria-label="Section berikutnya: ${escapeHtml(nextSection.section_title)}">
             <span class="hidden max-w-40 text-left text-xs font-semibold leading-tight group-hover:block">${escapeHtml(nextSection.section_title)}</span>
             <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
         </button>` : '<div></div>';
