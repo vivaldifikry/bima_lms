@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import psycopg2.extras
 from bima_lms.api.courses import get_pg_connection, get_current_user_id, update_course_total_lessons
 import boto3
+import base64
 from botocore.client import Config
 
 WIB = ZoneInfo("Asia/Jakarta")
@@ -397,7 +398,6 @@ def submit_assignment_minio(assignment_id, student_id, file_name, file_data):
     if not str(file_name).lower().endswith(".pdf"):
         frappe.throw("File jawaban harus berformat PDF.", frappe.ValidationError)
 
-    import base64
     try:
         # Format penamaan file: (current_file_name_timestamp)
         original_stem, ext = os.path.splitext(file_name)
@@ -406,19 +406,24 @@ def submit_assignment_minio(assignment_id, student_id, file_name, file_data):
         # Tambahkan prefix folder 'lms_assignments/' di sini
         minio_object_name = f"lms_assignments/{original_stem}_{timestamp}{ext.lower()}"
 
-        # Decode base64 file data dari client
+        # 1. Hapus header Data URL dari Base64 jika ada (misal: "data:application/pdf;base64,...")
         if "," in file_data:
             file_data = file_data.split(",")[1]
-        file_bytes = base64.b64decode(file_data)
 
-        # Upload ke MinIO Bucket
+        # 2. Decode Base64 menjadi raw bytes
+        file_bytes = base64.b64decode(file_data)
+        file_length = len(file_bytes)  # Hitung ukuran file dalam bytes
+
+        # 3. Unggah ke MinIO dengan menyertakan ContentLength
         s3_client = get_minio_client()
         s3_client.put_object(
             Bucket=MINIO_CONFIG["BUCKET_NAME"],
             Key=minio_object_name,
             Body=file_bytes,
+            ContentLength=file_length,
             ContentType='application/pdf'
         )
+
     except Exception as e:
         frappe.logger("bima_lms").error(f"Error upload to MinIO: {str(e)}")
         frappe.throw(f"Gagal mengunggah file ke MinIO: {str(e)}")
