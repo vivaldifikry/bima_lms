@@ -10,42 +10,48 @@ import psycopg2.extras
 from bima_lms.api.courses import get_pg_connection, get_current_user_id, update_course_total_lessons
 import boto3
 import base64
+import io
 from botocore.client import Config
 
 WIB = ZoneInfo("Asia/Jakarta")
 
-# Konfigurasi MinIO
-MINIO_CONFIG = {
-    "ACCESS_KEY": "ppdb-apps-development-user",
-    "SECRET_KEY": "eSBYo7g5bHP10SdDCVXJZ2wFnUlmKLjY",
-    "ENDPOINT_URL": "https://minio.cloudias79.com/",
-    "BUCKET_NAME": "ppdb-apps-development",
-    "REGION": "ap-southeast-1"
-}
+def get_minio_config():
+    """Mendapatkan konfigurasi MinIO dinamis dari site_config.json"""
+    return {
+        "ACCESS_KEY": frappe.conf.get("minio_access_key"),
+        "SECRET_KEY": frappe.conf.get("minio_secret_key"),
+        "ENDPOINT_URL": frappe.conf.get("minio_endpoint_url"),
+        "BUCKET_NAME": frappe.conf.get("minio_bucket_name"),
+        "REGION": frappe.conf.get("minio_region", "ap-southeast-1")
+    }
 
 def get_minio_client():
     """Membuat instance client boto3 S3 untuk MinIO"""
+    cfg = get_minio_config()
     return boto3.client(
         's3',
-        endpoint_url=MINIO_CONFIG["ENDPOINT_URL"],
-        aws_access_key_id=MINIO_CONFIG["ACCESS_KEY"],
-        aws_secret_access_key=MINIO_CONFIG["SECRET_KEY"],
-        config=Config(signature_version='s3v4'),
-        region_name=MINIO_CONFIG["REGION"]
+        endpoint_url=cfg["ENDPOINT_URL"],
+        aws_access_key_id=cfg["ACCESS_KEY"],
+        aws_secret_access_key=cfg["SECRET_KEY"],
+        config=Config(
+            signature_version='s3v4',
+            s3={'addressing_style': 'path'} # Membantu menghindari isu routing proxy S3
+        ),
+        region_name=cfg["REGION"]
     )
 
 def generate_minio_presigned_url(object_name, expires_in=3600):
     """Generates a presigned URL to view/download private MinIO objects."""
     if not object_name:
         return ""
-    # Jika object_name merupakan URL legacy Frappe/lokal, return langsung
     if object_name.startswith(("/files/", "/private/files/", "http://", "https://")):
         return object_name
     try:
+        cfg = get_minio_config()
         s3_client = get_minio_client()
         url = s3_client.generate_presigned_url(
             'get_object',
-            Params={'Bucket': MINIO_CONFIG["BUCKET_NAME"], 'Key': object_name},
+            Params={'Bucket': cfg["BUCKET_NAME"], 'Key': object_name},
             ExpiresIn=expires_in
         )
         return url
@@ -275,36 +281,6 @@ def get_section_detail(section_id, active_student_id=None):
                 "lesson_code": lesson["lesson_code"] or ""
             })
 
-        # for assignment in assignments:
-        #     parent_submission = submissions.get(assignment["assignment_id"]) if is_parent else {}
-        #     result["assignments"].append({
-        #         "assignment_id": assignment["assignment_id"],
-        #         "course_id": assignment["course_id"],
-        #         "section_id": assignment["section_id"],
-        #         "title": assignment["title"] or "Tanpa Judul",
-        #         "instructions": assignment["instructions"] or "",
-        #         "attachment_url": assignment["attachment_url"] or "",
-        #         "display_order": assignment["display_order"],
-        #         "deadline": assignment["deadline"].isoformat() if assignment["deadline"] else None,
-        #         "max_score": float(assignment["max_score"]) if assignment["max_score"] is not None else 100.0,
-        #         "submitted_at": as_wib_iso((parent_submission or {}).get("submitted_at")),
-        #         "submission_file_path": (parent_submission or {}).get("file_path"),
-        #         "score": float(parent_submission["score"]) if parent_submission and parent_submission["score"] is not None else None,
-        #         "feedback_notes": (parent_submission or {}).get("feedback_notes") or "",
-        #         "submissions": [
-        #             {
-        #                 "submission_id": submission["submission_id"],
-        #                 "student_name": submission["student_name"] or "Tanpa Nama",
-        #                 "nisn": submission["nisn"] or "-",
-        #                 "submitted_at": as_wib_iso(submission["submitted_at"]),
-        #                 "file_path": submission["file_path"],
-        #                 "score": float(submission["score"]) if submission["score"] is not None else None,
-        #                 "feedback_notes": submission["feedback_notes"] or ""
-        #             }
-        #             for submission in (submissions.get(assignment["assignment_id"]) or [])
-        #         ] if is_teacher else []
-        #     })
-
         for assignment in assignments:
             parent_submission = submissions.get(assignment["assignment_id"]) if is_parent else {}
             parent_file_path = (parent_submission or {}).get("file_path")
@@ -414,12 +390,16 @@ def submit_assignment_minio(assignment_id, student_id, file_name, file_data):
         file_bytes = base64.b64decode(file_data)
         file_length = len(file_bytes)  # Hitung ukuran file dalam bytes
 
+        # Gunakan io.BytesIO agar boto3 dapat melakukan seek() dan mengukur Content-Length secara native
+        file_stream = io.BytesIO(file_bytes)
+
         # 3. Unggah ke MinIO dengan menyertakan ContentLength
+        cfg = get_minio_config()
         s3_client = get_minio_client()
         s3_client.put_object(
-            Bucket=MINIO_CONFIG["BUCKET_NAME"],
+            Bucket=cfg["BUCKET_NAME"],
             Key=minio_object_name,
-            Body=file_bytes,
+            Body=file_stream,
             ContentLength=file_length,
             ContentType='application/pdf'
         )
