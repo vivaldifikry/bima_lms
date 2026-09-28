@@ -236,8 +236,8 @@ function getPageHTML() {
                                     <button id="btn-quiz-previous" type="button" class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50">Sebelumnya</button>
                                 </div>
                                 <div id="quiz-footer-right" class="flex items-center gap-2">
-                                    <button id="btn-quiz-next" type="button" class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700">Berikutnya</button>
                                     <button id="btn-quiz-save-temp" type="button" class="hidden rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-700 hover:bg-amber-100">Simpan Jawaban Sementara</button>
+                                    <button id="btn-quiz-next" type="button" class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700">Berikutnya</button>
                                     <button id="btn-quiz-submit" type="button" class="hidden rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">Submit Quiz</button>
                                     <button id="btn-quiz-close" type="button" class="hidden rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700">Tutup</button>
                                 </div>
