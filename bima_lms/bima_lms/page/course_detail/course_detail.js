@@ -255,6 +255,17 @@ frappe.pages['course-detail'].on_page_load = function(wrapper) {
 let currentCourseData = null;
 let categoryListCache = null;
 
+function stopCourseVideoPlayback() {
+    const $frame = $('#video-frame');
+    if (!$frame.length) return;
+    try {
+        const clone = $frame.clone(false, false).attr('src', 'about:blank');
+        $frame.replaceWith(clone);
+    } catch (e) {
+        try { $frame.attr('src', 'about:blank'); } catch (_) { /* noop */ }
+    }
+}
+
 frappe.pages['course-detail'].refresh = function(wrapper) {
     const route = frappe.get_route();
     const params = frappe.route_options || {};
@@ -327,6 +338,8 @@ function renderCourseNavigation(previousCourse, nextCourse) {
     $navigation.find('.course-nav-button').off('click').on('click', function() {
         const nextCourseId = $(this).data('course-id');
 
+        stopCourseVideoPlayback();
+
         loadCourseNavigation(nextCourseId);
         load_course_detail(nextCourseId);
         if (window.CourseSectionComponent) {
@@ -338,6 +351,8 @@ function renderCourseNavigation(previousCourse, nextCourse) {
 }
 
 function load_course_detail(course_id) {
+    stopCourseVideoPlayback();
+
     $('#detail-loading').removeClass('hidden');
     $('#detail-content').addClass('hidden');
     $('#action-buttons-wrapper').addClass('hidden');
@@ -381,6 +396,9 @@ function renderViewMode() {
     const formattedDesc = escapeHtml(data.full_description || '').replace(/\n/g, '<br>');
     $('#view-full-desc').html(formattedDesc || '<em class="text-gray-400">Belum ada deskripsi lengkap.</em>');
 
+    // Hentikan dulu playback video lama sebelum memasang yang baru
+    stopCourseVideoPlayback();
+
     if (data.embed_video_url) {
         $('#video-frame').attr('src', data.embed_video_url);
         $('#video-frame-wrapper').removeClass('hidden');
@@ -388,7 +406,6 @@ function renderViewMode() {
     } else {
         $('#video-frame-wrapper').addClass('hidden');
         $('#video-placeholder').removeClass('hidden');
-        $('#video-frame').attr('src', '');
     }
 
     toggleViewMode();
@@ -736,3 +753,35 @@ function isLiveClassExpired(startTime, durationMinutes) {
         ? false
         : Date.now() >= start.getTime() + duration * 60 * 1000;
 }
+
+frappe.pages['course-detail'].on_page_hide = function(wrapper) {
+    stopCourseVideoPlayback();
+};
+
+frappe.pages['course-detail'].on_page_unload = function(wrapper) {
+    stopCourseVideoPlayback();
+};
+
+// Fallback: hentikan video saat user berpindah route via SPA
+$(window).on('popstate.courseVideoCleanup hashchange.courseVideoCleanup', function() {
+    const route = (frappe.get_route && frappe.get_route()) || [];
+    if (route[0] !== 'course-detail') {
+        stopCourseVideoPlayback();
+    }
+});
+
+$(window).on('beforeunload.videoCleanup', function() {
+    // Jangan preventDefault, cuma untuk memastikan playback dihentikan
+    // saat user benar-benar menutup/refresh tab.
+    try { $('#video-frame').attr('src', 'about:blank'); } catch (e) {}
+});
+
+// Hentikan playback video saat Frappe SPA berpindah halaman.
+// Event 'page-change' dipicu oleh Frappe router setiap kali route berubah,
+// termasuk saat frappe.set_route() dipanggil (yang TIDAK memicu popstate).
+$(document).on('page-change.videoCleanup', function() {
+    const route = (frappe.get_route && frappe.get_route()) || [];
+    if (route[0] !== 'course-detail') {
+        stopCourseVideoPlayback();
+    }
+});
