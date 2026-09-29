@@ -428,6 +428,105 @@ function bindGlobalEvents() {
         const card = $(this).closest('.quiz-edit-question-card');
         activeQuiz.questions[Number(card.data('question-index'))].options[Number($(this).data('option-index'))].option_text = $(this).val();
     });
+
+        // === Media soal quiz: input URL ===
+    $(document).off('input', '.quiz-edit-url-image').on('input', '.quiz-edit-url-image', function() {
+        const idx = Number($(this).data('question-index'));
+        const question = activeQuiz.questions[idx];
+        const value = $(this).val().trim();
+        question.url_image_raw = value;
+        const preview = $(`.quiz-edit-image-preview[data-question-index="${idx}"]`);
+        if (value) {
+            preview.html(`<img src="${escapeHtml(value)}" class="max-h-40 w-auto rounded border border-gray-200" onerror="this.style.display='none'" />`);
+        } else {
+            preview.empty();
+        }
+    });
+
+    $(document).off('input', '.quiz-edit-url-video').on('input', '.quiz-edit-url-video', function() {
+        const idx = Number($(this).data('question-index'));
+        activeQuiz.questions[idx].url_video = $(this).val().trim();
+    });
+
+    $(document).off('input', '.quiz-edit-url-pdf').on('input', '.quiz-edit-url-pdf', function() {
+        const idx = Number($(this).data('question-index'));
+        const question = activeQuiz.questions[idx];
+        const value = $(this).val().trim();
+        question.url_pdf_raw = value;
+        const preview = $(`.quiz-edit-pdf-preview[data-question-index="${idx}"]`);
+        if (value) {
+            preview.html(`<a href="${escapeHtml(value)}" target="_blank" class="text-xs font-semibold text-indigo-600 hover:underline">Lihat PDF</a>`);
+        } else {
+            preview.empty();
+        }
+    });
+
+    // === Media soal quiz: upload gambar ===
+    $(document).off('click', '.btn-upload-quiz-image').on('click', '.btn-upload-quiz-image', function() {
+        const idx = Number($(this).data('question-index'));
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.jpg,.jpeg,.png,.webp,.gif,image/*';
+        input.onchange = function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            if (file.size > 5 * 1024 * 1024) {
+                frappe.msgprint(__('Ukuran file maksimal 5 MB.'));
+                return;
+            }
+            readFileAsBase64(file).then(function(base64Data) {
+                frappe.call({
+                    method: 'bima_lms.api.section_details.upload_quiz_media_minio',
+                    args: { file_name: file.name, file_data: base64Data, media_type: 'image' },
+                    freeze: true,
+                    freeze_message: __('Mengunggah gambar...'),
+                    callback: function(response) {
+                        if (!response.message || response.message.status !== 'success') return;
+                        activeQuiz.questions[idx].url_image_raw = response.message.object_name;
+                        frappe.show_alert({ message: __('Gambar berhasil diunggah. Klik Simpan Perubahan untuk menyimpan.'), indicator: 'green' });
+                        renderQuizQuestion();
+                    }
+                });
+            }).catch(function() {
+                frappe.msgprint(__('Gagal membaca file gambar.'));
+            });
+        };
+        input.click();
+    });
+
+    // === Media soal quiz: upload PDF ===
+    $(document).off('click', '.btn-upload-quiz-pdf').on('click', '.btn-upload-quiz-pdf', function() {
+        const idx = Number($(this).data('question-index'));
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.pdf,application/pdf';
+        input.onchange = function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            if (file.size > 5 * 1024 * 1024) {
+                frappe.msgprint(__('Ukuran file maksimal 5 MB.'));
+                return;
+            }
+            readFileAsBase64(file).then(function(base64Data) {
+                frappe.call({
+                    method: 'bima_lms.api.section_details.upload_quiz_media_minio',
+                    args: { file_name: file.name, file_data: base64Data, media_type: 'pdf' },
+                    freeze: true,
+                    freeze_message: __('Mengunggah PDF...'),
+                    callback: function(response) {
+                        if (!response.message || response.message.status !== 'success') return;
+                        activeQuiz.questions[idx].url_pdf_raw = response.message.object_name;
+                        frappe.show_alert({ message: __('PDF berhasil diunggah. Klik Simpan Perubahan untuk menyimpan.'), indicator: 'green' });
+                        renderQuizQuestion();
+                    }
+                });
+            }).catch(function() {
+                frappe.msgprint(__('Gagal membaca file PDF.'));
+            });
+        };
+        input.click();
+    });
+
     $(document).off('dragstart', '.btn-quiz-question').on('dragstart', '.btn-quiz-question', function(event) {
         if (!quizEditMode) return;
         quizDragQuestionIndex = Number($(this).data('question-index'));
@@ -675,46 +774,6 @@ function bindGlobalEvents() {
         $input.val('');
     });
 
-    // $(document).off('click', '.btn-upload-assignment').on('click', '.btn-upload-assignment', function() {
-    //     const assignmentId = $(this).data('assignment-id');
-    //     const studentId = window.StudentSwitcher ? window.StudentSwitcher.getActiveStudentId() : null;
-    //     if (!studentId) {
-    //         frappe.msgprint(__('Silakan pilih akun anak terlebih dahulu.'));
-    //         return;
-    //     }
-
-    //     new frappe.ui.FileUploader({
-    //         restrictions: { allowed_file_types: ['.pdf'] },
-    //         on_success: function(file) {
-    //             frappe.call({
-    //                 method: 'bima_lms.api.section_details.rename_uploaded_file',
-    //                 args: { file_path: file.file_url },
-    //                 callback: function(renameResponse) {
-    //                     if (!renameResponse.message || !renameResponse.message.file_url) return;
-    //                     frappe.call({
-    //                         method: 'bima_lms.api.section_details.submit_assignment',
-    //                         args: {
-    //                             assignment_id: assignmentId,
-    //                             student_id: studentId,
-    //                             file_path: renameResponse.message.file_url
-    //                         },
-    //                         freeze: true,
-    //                         freeze_message: __('Mengumpulkan jawaban...'),
-    //                         callback: function(response) {
-    //                             if (response.message && response.message.status === 'success') {
-    //                                 frappe.show_alert({ message: __('Jawaban berhasil dikumpulkan'), indicator: 'green' });
-    //                                 loadSectionDetail(currentSectionId);
-    //                             } else if (response.message && response.message.status === 'already_submitted') {
-    //                                 frappe.msgprint(__('Tugas ini sudah dikumpulkan sebelumnya.'));
-    //                                 loadSectionDetail(currentSectionId);
-    //                             }
-    //                         }
-    //                     });
-    //                 }
-    //             });
-    //         }
-    //     });
-    // });
 
     $(document).off('click', '.btn-upload-assignment').on('click', '.btn-upload-assignment', function() {
         const assignmentId = $(this).data('assignment-id');
@@ -1064,12 +1123,13 @@ function renderQuizQuestion() {
     $('#quiz-progress').css('width', `${((activeQuizQuestionIndex + 1) / activeQuiz.questions.length) * 100}%`);
     $('#quiz-question-view').html(`
         <h3 class="text-lg font-semibold leading-relaxed text-gray-900">${activeQuizQuestionIndex + 1}. ${escapeHtml(question.question_text)}</h3>
+        ${renderQuizQuestionMedia(question)}
         <div class="mt-6 space-y-3">${question.options.map(option => `
             <label class="flex items-start gap-3 rounded-lg border p-4 ${quizCanAnswer ? 'cursor-pointer hover:border-indigo-400' : ''} ${!quizCanAnswer && option.is_correct ? 'border-emerald-300 bg-emerald-100' : selected === option.option_id ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200'}">
                 <input type="radio" class="quiz-option-input mt-1" name="quiz-option" value="${option.option_id}" ${selected === option.option_id ? 'checked' : ''} ${quizCanAnswer ? '' : 'disabled'}>
                 <span class="text-sm ${!quizCanAnswer && option.is_correct ? 'font-semibold text-emerald-800' : 'text-gray-700'}">${escapeHtml(option.option_text)}</span>
             </label>`).join('')}</div>`);
-        $('#quiz-question-buttons').html(activeQuiz.questions.map((item, index) => {
+    $('#quiz-question-buttons').html(activeQuiz.questions.map((item, index) => {
             const answered = activeQuizAnswers[index] !== undefined;
             const current = index === activeQuizQuestionIndex;
             return `<button type="button" class="btn-quiz-question rounded-lg border px-2 py-2 text-xs font-bold ${current ? 'border-indigo-600 bg-indigo-600 text-white' : answered ? 'border-orange-400 bg-orange-400 text-white' : 'border-gray-300 bg-white text-gray-700 hover:border-indigo-400'}" data-question-index="${index}" aria-label="Soal ${index + 1}">${index + 1}</button>`;
@@ -1091,6 +1151,9 @@ function closeQuizModal(reloadAfterClose = false) {
         });
         return;
     }
+    // Hentikan playback video dulu sebelum menyembunyikan modal
+    stopQuizMediaPlayback();
+
     const shouldReload = reloadAfterClose || quizResultVisible;
     activeQuiz = null;
     quizCanAnswer = false;
@@ -1733,6 +1796,88 @@ function formatSubmissionDate(dateStr) {
     return `${parts.day} ${parts.month} ${parts.year} pukul ${parts.hour}:${parts.minute}:${parts.second}`;
 }
 
+// === MEDIA QUIZ
+function readFileAsBase64(file) {
+    return new Promise(function(resolve, reject) {
+        const reader = new FileReader();
+        reader.onload = function(e) { resolve(e.target.result); };
+        reader.onerror = function() { reject(new Error('Gagal membaca file.')); };
+        reader.readAsDataURL(file);
+    });
+}
+
+function renderQuizQuestionMedia(question) {
+    const parts = [];
+    const imageUrl = question.url_image || '';
+    const pdfUrl = question.url_pdf || '';
+    const videoEmbed = question.embed_video_url || question.url_video || '';
+
+    if (imageUrl) {
+        parts.push(`
+            <div class="mt-4">
+                <img src="${escapeHtml(imageUrl)}" alt="Media soal" class="max-h-72 w-auto rounded-lg border border-gray-200 shadow-sm" />
+            </div>`);
+    }
+    if (videoEmbed) {
+        parts.push(`
+            <div class="mt-4 aspect-video w-full max-w-2xl">
+                <iframe class="w-full h-full rounded-lg shadow-sm" src="${escapeHtml(videoEmbed)}" frameborder="0" allowfullscreen></iframe>
+            </div>`);
+    }
+    if (pdfUrl) {
+        parts.push(`
+            <div class="mt-4">
+                <a href="${escapeHtml(pdfUrl)}" target="_blank" rel="noopener noreferrer"
+                   class="inline-flex items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-100">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3M4 4h16v16H4z"></path></svg>
+                    Buka PDF Media Soal
+                </a>
+            </div>`);
+    }
+    return parts.join('');
+}
+
+function renderQuizMediaEditFields(question, questionIndex) {
+    return `
+        <div class="mt-4 space-y-4 rounded-lg border border-gray-200 bg-gray-50 p-4">
+            <h4 class="text-sm font-bold text-gray-800">Media Soal (Opsional)</h4>
+
+            <!-- Gambar -->
+            <div class="space-y-2">
+                <label class="block text-xs font-semibold text-gray-700">URL Gambar</label>
+                <div class="flex flex-wrap gap-2">
+                    <input type="text" class="quiz-edit-url-image flex-1 min-w-0 rounded border border-gray-300 px-2 py-1.5 text-sm"
+                           data-question-index="${questionIndex}" value="${escapeHtml(question.url_image_raw || '')}" placeholder="https://... atau hasil upload">
+                    <button type="button" class="btn-upload-quiz-image rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100" data-question-index="${questionIndex}">Upload Gambar</button>
+                </div>
+                <div class="quiz-edit-image-preview" data-question-index="${questionIndex}">
+                    ${question.url_image ? `<img src="${escapeHtml(question.url_image)}" class="max-h-40 w-auto rounded border border-gray-200" />` : ''}
+                </div>
+            </div>
+
+            <!-- Video -->
+            <div class="space-y-2">
+                <label class="block text-xs font-semibold text-gray-700">URL Video (YouTube / Vimeo)</label>
+                <input type="text" class="quiz-edit-url-video w-full rounded border border-gray-300 px-2 py-1.5 text-sm"
+                       data-question-index="${questionIndex}" value="${escapeHtml(question.url_video || '')}" placeholder="https://www.youtube.com/watch?v=...">
+            </div>
+
+            <!-- PDF -->
+            <div class="space-y-2">
+                <label class="block text-xs font-semibold text-gray-700">URL PDF</label>
+                <div class="flex flex-wrap gap-2">
+                    <input type="text" class="quiz-edit-url-pdf flex-1 min-w-0 rounded border border-gray-300 px-2 py-1.5 text-sm"
+                           data-question-index="${questionIndex}" value="${escapeHtml(question.url_pdf_raw || '')}" placeholder="https://... atau hasil upload">
+                    <button type="button" class="btn-upload-quiz-pdf rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100" data-question-index="${questionIndex}">Upload PDF</button>
+                </div>
+                <div class="quiz-edit-pdf-preview" data-question-index="${questionIndex}">
+                    ${question.url_pdf ? `<a href="${escapeHtml(question.url_pdf)}" target="_blank" class="text-xs font-semibold text-indigo-600 hover:underline">Lihat PDF</a>` : ''}
+                </div>
+            </div>
+        </div>`;
+}
+
+
 function renderQuizEditView() {
     const question = activeQuiz.questions[activeQuizQuestionIndex];
     $('#quiz-modal-title').html(`${escapeHtml(activeQuiz.quiz_title)} <span class="ml-2 rounded-lg bg-indigo-100 px-2.5 py-1 text-sm font-bold text-indigo-700">Mode Edit</span>`);
@@ -1767,6 +1912,7 @@ function renderQuizEditView() {
                 <label class="block text-xs font-semibold text-gray-700 mb-1">Pertanyaan</label>
                 <textarea rows="5" class="quiz-edit-question-text w-full rounded-lg border border-gray-300 px-3 py-2 text-sm">${escapeHtml(question.question_text || '')}</textarea>
             </div>
+            ${renderQuizMediaEditFields(question, activeQuizQuestionIndex)}
             <div>
                 <label class="block text-xs font-semibold text-gray-700 mb-1">Bobot Nilai</label>
                 <input type="number" min="1" step="0.01" class="quiz-edit-points w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" value="${Math.max(1, Number(question.points) || 1)}">
@@ -1849,8 +1995,23 @@ function validateQuizEdit() {
             frappe.msgprint(__('Teks pilihan jawaban tidak boleh kosong.'));
             return false;
         }
+        // Validasi media jika ada nilainya
+        if (question.url_image_raw && !/\.(jpg|jpeg|png|webp|gif)$/i.test(question.url_image_raw) && !/^https?:\/\//i.test(question.url_image_raw)) {
+            // biarkan (mungkin object name MinIO). Tidak ada validasi ketat.
+        }
     }
     return true;
+}
+
+function stopQuizMediaPlayback() {
+    // Hapus semua iframe di dalam modal quiz agar browser unload playback video.
+    $('#quiz-question-view').find('iframe').each(function() {
+        const $iframe = $(this);
+        // Set src ke about:blank dulu agar proses unload lebih cepat dan reliable,
+        // lalu hapus elemennya.
+        try { $iframe.attr('src', 'about:blank'); } catch (e) { /* noop */ }
+        $iframe.remove();
+    });
 }
 
 function saveQuizEdit() {
@@ -1859,7 +2020,18 @@ function saveQuizEdit() {
         method: 'bima_lms.api.section_details.save_quiz_questions',
         args: {
             quiz_id: activeQuiz.quiz_id,
-            questions: JSON.stringify(activeQuiz.questions),
+            questions: JSON.stringify(activeQuiz.questions.map(function(q) {
+                return {
+                    quiz_question_id: q.quiz_question_id,
+                    question_id: q.question_id,
+                    question_text: q.question_text,
+                    points: q.points,
+                    url_image: q.url_image_raw || '',
+                    url_pdf: q.url_pdf_raw || '',
+                    url_video: q.url_video || '',
+                    options: q.options
+                };
+            })),
             deleted_question_ids: JSON.stringify(quizEditDeletedQuestionIds),
             deleted_option_ids: JSON.stringify(quizEditDeletedOptionIds)
         },

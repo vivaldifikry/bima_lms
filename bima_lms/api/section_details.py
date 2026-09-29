@@ -40,6 +40,24 @@ def get_minio_client():
         region_name=cfg["REGION"]
     )
 
+
+QUIZ_MEDIA_ALLOWED_IMAGES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+QUIZ_MEDIA_MAX_BYTES = 5 * 1024 * 1024  # 5 MB
+
+def _detect_content_type(ext):
+    ext = ext.lower()
+    if ext in (".jpg", ".jpeg"):
+        return "image/jpeg"
+    if ext == ".png":
+        return "image/png"
+    if ext == ".webp":
+        return "image/webp"
+    if ext == ".gif":
+        return "image/gif"
+    if ext == ".pdf":
+        return "application/pdf"
+    return "application/octet-stream"
+
 def generate_minio_presigned_url(object_name, expires_in=3600):
     """Generates a presigned URL to view/download private MinIO objects."""
     if not object_name:
@@ -185,6 +203,9 @@ def get_section_detail(section_id, active_student_id=None):
                 qb.question_text,
                 qb.question_type,
                 qb.default_points,
+                qb.url_image,
+                qb.url_pdf,
+                qb.url_video,
                 qo.option_id,
                 qo.option_text,
                 qo.is_correct
@@ -335,13 +356,24 @@ def get_section_detail(section_id, active_student_id=None):
                 (item for item in quiz["questions"] if item["question_id"] == row["question_id"]),
                 None
             )
+
             if not question:
+                raw_image = row.get("url_image")
+                raw_pdf = row.get("url_pdf")
+                raw_video = row.get("url_video")
+
                 question = {
                     "quiz_question_id": row["quiz_question_id"],
                     "question_id": row["question_id"],
                     "question_text": row["question_text"] or "",
                     "question_type": row["question_type"] or "multiple_choice",
                     "points": float(row["points_override"] if row["points_override"] is not None else row["default_points"] or 0),
+                    "url_image_raw": raw_image or "",
+                    "url_pdf_raw": raw_pdf or "",
+                    "url_video": raw_video or "",
+                    "url_image": generate_minio_presigned_url(raw_image) if raw_image else "",
+                    "url_pdf": generate_minio_presigned_url(raw_pdf) if raw_pdf else "",
+                    "embed_video_url": get_embed_video_url(raw_video) if raw_video else "",
                     "options": []
                 }
                 quiz["questions"].append(question)
@@ -474,36 +506,68 @@ def submit_assignment_minio(assignment_id, student_id, file_name, file_data):
     finally:
         conn.close()
 
-# @frappe.whitelist()
-# def rename_uploaded_file(file_path):
-#     """Rename an uploaded Frappe file with a unique WIB timestamp."""
-#     if not file_path or not file_path.startswith(("/files/", "/private/files/")):
-#         frappe.throw("Lokasi file tidak valid.", frappe.ValidationError)
+@frappe.whitelist()
+def upload_quiz_media_minio(file_name, file_data, media_type):
+    """
+    Upload gambar atau PDF untuk media soal quiz ke MinIO folder lms_media_question_quiz/.
+    Return object name (belum disimpan ke DB; disimpan saat save_quiz_questions).
+    """
+    if not file_name or not file_data or not media_type:
+        frappe.throw("Parameter file dan tipe media wajib diisi.", frappe.MandatoryError)
 
-#     file_doc = frappe.db.get_value(
-#         "File", {"file_url": file_path}, ["name", "file_name", "is_private", "owner"], as_dict=True
-#     )
-#     if not file_doc or file_doc.owner != frappe.session.user:
-#         frappe.throw("File tidak ditemukan atau tidak dapat diubah.", frappe.PermissionError)
+    user_roles = frappe.get_roles(frappe.session.user)
+    if frappe.session.user != "Administrator" and "LMS Teacher" not in user_roles:
+        frappe.throw("Hanya guru yang dapat mengunggah media quiz.", frappe.PermissionError)
 
-#     original_name = os.path.basename(file_doc.file_name or file_path.rsplit("/", 1)[-1])
-#     stem, extension = os.path.splitext(original_name)
-#     if extension.lower() != ".pdf":
-#         frappe.throw("File jawaban harus berformat PDF.", frappe.ValidationError)
+    original_stem, ext = os.path.splitext(file_name)
+    ext = ext.lower()
 
-#     timestamp = datetime.now(WIB).strftime("%Y%m%d_%H%M%S_%f")
-#     new_name = f"{stem}_{timestamp}{extension.lower()}"
-#     base_path = frappe.get_site_path("private" if file_doc.is_private else "public", "files")
-#     old_path = os.path.join(base_path, os.path.basename(file_path))
-#     new_path = os.path.join(base_path, new_name)
-#     if not os.path.isfile(old_path):
-#         frappe.throw("File hasil upload tidak ditemukan.", frappe.DoesNotExistError)
+    if media_type == "image":
+        if ext not in QUIZ_MEDIA_ALLOWED_IMAGES:
+            frappe.throw(
+                "Format gambar harus salah satu dari: jpg, jpeg, png, webp, gif.",
+                frappe.ValidationError
+            )
+    elif media_type == "pdf":
+        if ext != ".pdf":
+            frappe.throw("File harus berformat PDF.", frappe.ValidationError)
+    else:
+        frappe.throw("Tipe media tidak dikenal.", frappe.ValidationError)
 
-#     shutil.move(old_path, new_path)
-#     new_url = f"/private/files/{new_name}" if file_doc.is_private else f"/files/{new_name}"
-#     frappe.db.set_value("File", file_doc.name, {"file_name": new_name, "file_url": new_url})
-#     return {"file_url": new_url, "file_name": new_name}
+    try:
+        if "," in file_data:
+            file_data = file_data.split(",", 1)[1]
 
+        file_bytes = base64.b64decode(file_data)
+        file_length = len(file_bytes)
+
+        if file_length == 0:
+            frappe.throw("File kosong.", frappe.ValidationError)
+        if file_length > QUIZ_MEDIA_MAX_BYTES:
+            frappe.throw("Ukuran file maksimal 5 MB.", frappe.ValidationError)
+
+        timestamp = datetime.now(WIB).strftime("%Y%m%d_%H%M%S_%f")
+        minio_object_name = f"lms_media_question_quiz/{original_stem}_{timestamp}{ext}"
+
+        cfg = get_minio_config()
+        s3_client = get_minio_client()
+        s3_client.put_object(
+            Bucket=cfg["BUCKET_NAME"],
+            Key=minio_object_name,
+            Body=io.BytesIO(file_bytes),
+            ContentLength=file_length,
+            ContentType=_detect_content_type(ext),
+        )
+    except frappe.ValidationError:
+        raise
+    except Exception as e:
+        frappe.logger("bima_lms").error(f"Error upload quiz media to MinIO: {str(e)}")
+        frappe.throw(f"Gagal mengunggah media quiz ke MinIO: {str(e)}")
+
+    return {
+        "status": "success",
+        "object_name": minio_object_name,
+    }
 
 @frappe.whitelist()
 def submit_assignment(assignment_id, file_path, student_id=None):
@@ -583,6 +647,7 @@ def submit_assignment(assignment_id, file_path, student_id=None):
         conn.close()
 
 
+# === QUIZ ===
 @frappe.whitelist()
 def get_temp_quiz_answers(quiz_id, student_id):
     """Ambil jawaban sementara quiz untuk siswa aktif yang dipilih orang tua."""
@@ -885,6 +950,10 @@ def save_quiz_questions(quiz_id, questions=None, deleted_question_ids=None, dele
                 question_text = (question.get("question_text") or "").strip()
                 points = float(question.get("points") or 0)
                 options = question.get("options") or []
+                url_image = (question.get("url_image") or "").strip() or None
+                url_pdf = (question.get("url_pdf") or "").strip() or None
+                url_video = (question.get("url_video") or "").strip() or None
+
                 if not question_text:
                     frappe.throw("Pertanyaan tidak boleh kosong.", frappe.ValidationError)
                 if points < 1:
@@ -901,9 +970,12 @@ def save_quiz_questions(quiz_id, questions=None, deleted_question_ids=None, dele
                         UPDATE master.lms_question_bank
                         SET question_text = %s,
                             question_type = 'multiple_choice',
+                            url_image = %s,
+                            url_pdf = %s,
+                            url_video = %s,
                             is_deleted = false
                         WHERE question_id = %s
-                    """, (question_text, question_id))
+                    """, (question_text, url_image, url_pdf, url_video, question_id))
                 else:
                     cur.execute("""
                         SELECT setval(
@@ -917,12 +989,13 @@ def save_quiz_questions(quiz_id, questions=None, deleted_question_ids=None, dele
                     """)
                     cur.execute("""
                         INSERT INTO master.lms_question_bank
-                            (question_text, question_type, default_points, created_by,
-                             created_on, is_deleted)
+                            (question_text, question_type, default_points, 
+                            url_image, url_pdf, url_video,
+                            created_by, created_on, is_deleted)
                         VALUES (%s, 'multiple_choice', 5.00, %s,
                                 NOW() AT TIME ZONE 'Asia/Jakarta', false)
                         RETURNING question_id
-                    """, (question_text, current_user_id))
+                    """, (question_text, url_image, url_pdf, url_video, current_user_id))
                     question_id = cur.fetchone()["question_id"]
 
                 quiz_question_id = question.get("quiz_question_id")
@@ -980,7 +1053,8 @@ def save_quiz_questions(quiz_id, questions=None, deleted_question_ids=None, dele
             cur.execute("""
                 SELECT qq.quiz_question_id, qq.question_id, qq.display_order,
                        qq.points_override, qb.question_text, qb.question_type,
-                       qb.default_points, qo.option_id, qo.option_text, qo.is_correct
+                       qb.default_points, qb.url_image, qb.url_pdf, qb.url_video,
+                       qo.option_id, qo.option_text, qo.is_correct
                 FROM lms.quiz_questions qq
                 JOIN master.lms_question_bank qb ON qb.question_id = qq.question_id
                     AND qb.is_deleted = false
@@ -1000,18 +1074,26 @@ def save_quiz_questions(quiz_id, questions=None, deleted_question_ids=None, dele
     finally:
         conn.close()
 
-
 def group_quiz_question_rows(rows):
     questions = []
     for row in rows:
         question = next((item for item in questions if item["question_id"] == row["question_id"]), None)
         if not question:
+            raw_image = row.get("url_image")
+            raw_pdf = row.get("url_pdf")
+            raw_video = row.get("url_video")
             question = {
                 "quiz_question_id": row["quiz_question_id"],
                 "question_id": row["question_id"],
                 "question_text": row["question_text"] or "",
                 "question_type": row["question_type"] or "multiple_choice",
                 "points": float(row["points_override"] if row["points_override"] is not None else row["default_points"] or 0),
+                "url_image_raw": raw_image or "",
+                "url_pdf_raw": raw_pdf or "",
+                "url_video": raw_video or "",
+                "url_image": generate_minio_presigned_url(raw_image) if raw_image else "",
+                "url_pdf": generate_minio_presigned_url(raw_pdf) if raw_pdf else "",
+                "embed_video_url": get_embed_video_url(raw_video) if raw_video else "",
                 "options": []
             }
             questions.append(question)
