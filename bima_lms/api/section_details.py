@@ -2018,3 +2018,474 @@ def export_course_grades(course_id):
         frappe.throw(f"Gagal mengekspor nilai course: {str(e)}")
     finally:
         conn.close()
+
+
+def _build_child_grades_sheet(ws, sheet_kind, course_meta, student_meta, sections_payload, results_map):
+    """
+    Layout vertikal (portrait) untuk 1 siswa.
+    Kolom: Bab | Tugas/Quiz | Deadline/PG | Tgl Submit | Status/Nilai | Nilai/Status | Catatan
+    sheet_kind: 'task' atau 'quiz'
+    sections_payload: sama format dengan versi guru.
+    results_map: dict { item_id -> {...} } (hasil lookup untuk siswa ini).
+    """
+    is_task = (sheet_kind == "task")
+
+    # === Metadata block (row 1-7) ===
+    meta_rows = [
+        ("Judul Course", course_meta["course_title"]),
+        ("Kategori", course_meta["category_name"]),
+        ("Guru Pengampu", course_meta["instructor_name"]),
+        ("Digenerate", course_meta["generated_at_wib"]),
+    ]
+    for idx, (label, value) in enumerate(meta_rows, start=1):
+        c_label = ws.cell(row=idx, column=1, value=label)
+        c_label.font = Font(bold=True, size=12 if idx == 1 else 11, color=_EXPORT_COLOR_META_LABEL)
+        c_label.alignment = Alignment(horizontal="left", vertical="center")
+
+        c_value = ws.cell(row=idx, column=2, value=f": {value}")
+        if idx == 1:
+            c_value.font = Font(bold=True, size=12, color=_EXPORT_COLOR_META_VALUE)
+        else:
+            c_value.font = Font(size=11, color=_EXPORT_COLOR_META_VALUE)
+        c_value.alignment = Alignment(horizontal="left", vertical="center")
+
+    # Row 5 spacer, row 6-7 info siswa
+    c_label = ws.cell(row=6, column=1, value="NISN")
+    c_label.font = Font(bold=True, size=11, color=_EXPORT_COLOR_META_LABEL)
+    c_label.alignment = Alignment(horizontal="left", vertical="center")
+    c_value = ws.cell(row=6, column=2, value=f": {student_meta['nisn'] or '-'}")
+    c_value.font = Font(size=11, color=_EXPORT_COLOR_META_VALUE)
+
+    c_label = ws.cell(row=7, column=1, value="Nama Siswa")
+    c_label.font = Font(bold=True, size=11, color=_EXPORT_COLOR_META_LABEL)
+    c_label.alignment = Alignment(horizontal="left", vertical="center")
+    c_value = ws.cell(row=7, column=2, value=f": {student_meta['full_name'] or '-'}")
+    c_value.font = Font(size=11, color=_EXPORT_COLOR_META_VALUE)
+
+    # === Header tabel di row 9 ===
+    header_row = 9
+    data_start_row = 10
+
+    subheader_fill = PatternFill("solid", fgColor=_EXPORT_COLOR_SUBHEADER)
+    dark_bold_small = Font(bold=True, color="111827", size=11)
+
+    if is_task:
+        headers = ["Bab", "Nama Tugas", "Deadline", "Tanggal Submit", "Status Telat", "Nilai", "Catatan"]
+    else:
+        headers = ["Bab", "Nama Quiz", "Passing Grade", "Tanggal Submit", "Nilai", "Status"]
+
+    for c_idx, label in enumerate(headers, start=1):
+        c = ws.cell(row=header_row, column=c_idx, value=label)
+        c.fill = subheader_fill
+        c.font = dark_bold_small
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        c.border = _border_thin_all()
+
+    # === Data rows ===
+    date_fmt = "DD MMMM YYYY"
+    fill_late = PatternFill("solid", fgColor=_EXPORT_COLOR_LATE_RED)
+    fill_ungraded = PatternFill("solid", fgColor=_EXPORT_COLOR_UNGRADED_ORANGE)
+    fill_fail = PatternFill("solid", fgColor=_EXPORT_COLOR_FAIL_RED)
+
+    row_cursor = data_start_row
+
+    for sec_idx, sec in enumerate(sections_payload):
+        section_color = _SECTION_PALETTE[sec_idx % len(_SECTION_PALETTE)]
+        section_fill = PatternFill("solid", fgColor=section_color)
+
+        section_start_row = row_cursor
+        item_count = len(sec["items"])
+
+        for item in sec["items"]:
+            res = results_map.get(item["id"]) or {}
+
+            # Kolom A: Bab (diisi hanya di baris pertama, tapi kita set value + merge di akhir)
+            c_bab = ws.cell(row=row_cursor, column=1)
+            c_bab.fill = section_fill
+            c_bab.font = Font(bold=True, color="FFFFFF", size=10)
+            c_bab.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            c_bab.border = _border_thin_all()
+
+            # Kolom B: Nama Tugas/Quiz
+            c_item = ws.cell(row=row_cursor, column=2, value=item["title"] or "Tanpa Judul")
+            c_item.font = Font(bold=False, size=10, color="111827")
+            c_item.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+            c_item.border = _border_thin_all()
+
+            if is_task:
+                # Kolom C: Deadline
+                c = ws.cell(row=row_cursor, column=3)
+                if item.get("deadline"):
+                    c.value = item["deadline"]
+                    c.number_format = date_fmt
+                c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                c.border = _border_thin_all()
+
+                # Kolom D: Tanggal Submit
+                submitted_at = res.get("submitted_at")
+                c = ws.cell(row=row_cursor, column=4)
+                if submitted_at:
+                    c.value = submitted_at
+                    c.number_format = date_fmt
+                c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                c.border = _border_thin_all()
+
+                # Kolom E: Status Telat
+                is_late = res.get("is_late")
+                c = ws.cell(row=row_cursor, column=5)
+                if is_late is True:
+                    c.value = "Ya"
+                    c.fill = fill_late
+                elif is_late is False:
+                    c.value = "Tidak"
+                c.alignment = Alignment(horizontal="center", vertical="center")
+                c.border = _border_thin_all()
+
+                # Kolom F: Nilai
+                score = res.get("score")
+                c = ws.cell(row=row_cursor, column=6)
+                if score is not None:
+                    c.value = float(score)
+                elif submitted_at is not None:
+                    c.fill = fill_ungraded
+                c.alignment = Alignment(horizontal="center", vertical="center")
+                c.border = _border_thin_all()
+
+                # Kolom G: Catatan
+                if submitted_at and score is None:
+                    note = "Belum Dinilai"
+                    c = ws.cell(row=row_cursor, column=7, value=note)
+                    c.fill = fill_ungraded
+                else:
+                    c = ws.cell(row=row_cursor, column=7, value=res.get("feedback_notes") or "")
+                c.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+                c.border = _border_thin_all()
+
+            else:
+                # Quiz
+                # Kolom C: Passing Grade
+                pg = item.get("passing_grade")
+                if pg is not None and float(pg).is_integer():
+                    pg_str = f"{int(pg)}"
+                else:
+                    pg_str = str(pg) if pg is not None else "-"
+                c = ws.cell(row=row_cursor, column=3, value=pg_str)
+                c.alignment = Alignment(horizontal="center", vertical="center")
+                c.border = _border_thin_all()
+
+                # Kolom D: Tanggal Submit
+                submitted_at = res.get("submitted_at")
+                c = ws.cell(row=row_cursor, column=4)
+                if submitted_at:
+                    c.value = submitted_at
+                    c.number_format = date_fmt
+                c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                c.border = _border_thin_all()
+
+                # Kolom E: Nilai
+                total_score = res.get("total_score")
+                c = ws.cell(row=row_cursor, column=5)
+                if total_score is not None:
+                    c.value = float(total_score)
+                c.alignment = Alignment(horizontal="center", vertical="center")
+                c.border = _border_thin_all()
+
+                # Kolom F: Status
+                result_status = res.get("result_status")
+                c = ws.cell(row=row_cursor, column=6)
+                if result_status:
+                    c.value = result_status
+                    if result_status == "Tidak Lulus":
+                        c.fill = fill_fail
+                c.alignment = Alignment(horizontal="center", vertical="center")
+                c.border = _border_thin_all()
+
+            row_cursor += 1
+
+        # Merge kolom Bab untuk seluruh item dalam section
+        section_end_row = row_cursor - 1
+        if item_count > 1:
+            ws.merge_cells(
+                start_row=section_start_row, start_column=1,
+                end_row=section_end_row, end_column=1
+            )
+        # Set value pada cell top-left
+        ws.cell(row=section_start_row, column=1, value=sec["section_title"] or "Tanpa Judul")
+        # Pastikan border & fill tetap ada di seluruh cell merged
+        for r in range(section_start_row, section_end_row + 1):
+            c = ws.cell(row=r, column=1)
+            c.fill = section_fill
+            c.font = Font(bold=True, color="FFFFFF", size=10)
+            c.border = _border_thin_all()
+        # Alignment
+        ws.cell(row=section_start_row, column=1).alignment = Alignment(
+            horizontal="center", vertical="center", wrap_text=True
+        )
+
+    # === Column widths ===
+    ws.column_dimensions["A"].width = 20   # Bab
+    ws.column_dimensions["B"].width = 30   # Nama Tugas/Quiz
+    if is_task:
+        ws.column_dimensions["C"].width = 22   # Deadline
+        ws.column_dimensions["D"].width = 22   # Tgl Submit
+        ws.column_dimensions["E"].width = 12   # Status Telat
+        ws.column_dimensions["F"].width = 10   # Nilai
+        ws.column_dimensions["G"].width = 30   # Catatan
+    else:
+        ws.column_dimensions["C"].width = 14   # Passing Grade
+        ws.column_dimensions["D"].width = 22   # Tgl Submit
+        ws.column_dimensions["E"].width = 10   # Nilai
+        ws.column_dimensions["F"].width = 14   # Status
+
+    # Row heights
+    ws.row_dimensions[header_row].height = 26
+
+    # Freeze pane di A10
+    ws.freeze_panes = ws.cell(row=data_start_row, column=1)
+
+    # Print setup PORTRAIT
+    ws.page_setup.orientation = ws.ORIENTATION_PORTRAIT
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_margins = PageMargins(left=0.3, right=0.3, top=0.5, bottom=0.5, header=0.2, footer=0.2)
+
+    if not any(sec["items"] for sec in sections_payload):
+        msg = "Belum ada tugas pada course ini." if is_task else "Belum ada quiz pada course ini."
+        c = ws.cell(row=data_start_row, column=1, value=msg)
+        c.font = Font(italic=True, color="6B7280")
+
+
+@frappe.whitelist()
+def export_child_course_grades(course_id, student_id):
+    """Export rekap nilai 1 siswa (anak dari parent yang login) dalam format portrait."""
+    if not course_id:
+        frappe.throw("Parameter course_id diperlukan.", frappe.MandatoryError)
+    if not student_id:
+        frappe.throw("Akun anak belum dipilih.", frappe.MandatoryError)
+
+    user_roles = frappe.get_roles(frappe.session.user)
+    is_parent = "LMS Parent" in user_roles
+    if not is_parent:
+        frappe.throw("Hanya orang tua yang dapat menggunakan fitur ini.", frappe.PermissionError)
+
+    conn = get_pg_connection()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # ==== Validasi relasi parent-anak ====
+            cur.execute("""
+                SELECT 1
+                FROM auth.parent_student_relations psr
+                JOIN auth.users pu ON pu.user_id = psr.parent_user_id
+                WHERE pu.user_email = %s AND psr.student_user_id = %s
+                LIMIT 1
+            """, (frappe.session.user, student_id))
+            if not cur.fetchone():
+                frappe.throw("Akun anak tidak valid untuk pengguna ini.", frappe.PermissionError)
+
+            # ==== Ambil data siswa ====
+            cur.execute("""
+                SELECT id, nisn, full_name
+                FROM kelaskita.students
+                WHERE id = %s
+                  AND COALESCE(is_deleted, false) = false
+                  AND UPPER(COALESCE(status, '')) = 'ACTIVE'
+                LIMIT 1
+            """, (student_id,))
+            student = cur.fetchone()
+            if not student:
+                frappe.throw("Data anak tidak ada dalam sistem.", frappe.DoesNotExistError)
+
+            # ==== Ambil detail course ====
+            cur.execute("""
+                SELECT
+                    c.course_id,
+                    c.course_title,
+                    c.instructor_id,
+                    cat.category_name,
+                    u.user_full_name AS instructor_name
+                FROM lms.courses c
+                LEFT JOIN master.lms_course_categories cat ON cat.category_id = c.category_id
+                LEFT JOIN auth.users u ON u.user_id = c.instructor_id
+                WHERE c.course_id = %s AND c.is_deleted = false
+                LIMIT 1
+            """, (course_id,))
+            course = cur.fetchone()
+            if not course:
+                frappe.throw("Course tidak ditemukan.", frappe.DoesNotExistError)
+
+            # ==== Validasi siswa terdaftar di course ====
+            cur.execute("""
+                SELECT 1
+                FROM lms.course_enrollments ce
+                WHERE ce.course_id = %s AND ce.student_id = %s AND ce.status = 'ENROLLED'
+                LIMIT 1
+            """, (course_id, student_id))
+            if not cur.fetchone():
+                frappe.throw("Anak Anda tidak terdaftar pada course ini.", frappe.PermissionError)
+
+            # ==== Ambil semua section ====
+            cur.execute("""
+                SELECT section_id, section_title, display_order
+                FROM lms.course_sections
+                WHERE course_id = %s AND is_deleted = false
+                ORDER BY display_order ASC NULLS LAST, section_id ASC
+            """, (course_id,))
+            sections_rows = cur.fetchall()
+
+            # ==== Assignments per section ====
+            cur.execute("""
+                SELECT assignment_id, section_id, title, deadline, max_score, display_order
+                FROM lms.assignments
+                WHERE course_id = %s AND is_deleted = false
+                ORDER BY display_order ASC NULLS LAST, assignment_id ASC
+            """, (course_id,))
+            assignments_rows = cur.fetchall()
+
+            # ==== Submissions siswa ini ====
+            assignment_ids = [a["assignment_id"] for a in assignments_rows]
+            submissions_map = {}
+            if assignment_ids:
+                cur.execute("""
+                    SELECT assignment_id, submitted_at, is_late, score, feedback_notes
+                    FROM lms.assignment_submissions
+                    WHERE assignment_id = ANY(%s) AND student_id = %s
+                """, (assignment_ids, student_id))
+                for row in cur.fetchall():
+                    submissions_map[row["assignment_id"]] = {
+                        "submitted_at": row["submitted_at"],
+                        "is_late": row["is_late"],
+                        "score": row["score"],
+                        "feedback_notes": row["feedback_notes"],
+                    }
+
+            # ==== Quizzes per section ====
+            cur.execute("""
+                SELECT quiz_id, section_id, quiz_title, passing_grade, display_order
+                FROM lms.quizzes
+                WHERE course_id = %s AND is_deleted = false
+                ORDER BY display_order ASC NULLS LAST, quiz_id ASC
+            """, (course_id,))
+            quizzes_rows = cur.fetchall()
+
+            # ==== Latest attempt per quiz ====
+            quiz_ids = [q["quiz_id"] for q in quizzes_rows]
+            attempts_map = {}
+            if quiz_ids:
+                cur.execute("""
+                    WITH ranked AS (
+                        SELECT quiz_id, total_score, result_status, submitted_at,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY quiz_id
+                                   ORDER BY submitted_at DESC NULLS LAST, attempt_id DESC
+                               ) AS rn
+                        FROM lms.quiz_attempts
+                        WHERE quiz_id = ANY(%s) AND student_id = %s
+                    )
+                    SELECT quiz_id, total_score, result_status, submitted_at
+                    FROM ranked WHERE rn = 1
+                """, (quiz_ids, student_id))
+                for row in cur.fetchall():
+                    attempts_map[row["quiz_id"]] = {
+                        "total_score": row["total_score"],
+                        "result_status": row["result_status"],
+                        "submitted_at": row["submitted_at"],
+                    }
+
+        # ==== Susun payload per section ====
+        assignments_by_section = {}
+        for a in assignments_rows:
+            assignments_by_section.setdefault(a["section_id"], []).append(a)
+        quizzes_by_section = {}
+        for q in quizzes_rows:
+            quizzes_by_section.setdefault(q["section_id"], []).append(q)
+
+        task_sections_payload = []
+        quiz_sections_payload = []
+
+        for sec in sections_rows:
+            sec_id = sec["section_id"]
+            sec_title = sec["section_title"] or "Tanpa Judul"
+
+            items_task = [
+                {
+                    "id": a["assignment_id"],
+                    "title": a["title"] or "Tanpa Judul",
+                    "deadline": a["deadline"],
+                    "max_score": float(a["max_score"]) if a["max_score"] is not None else 100.0,
+                }
+                for a in assignments_by_section.get(sec_id, [])
+            ]
+            if items_task:
+                task_sections_payload.append({
+                    "section_id": sec_id,
+                    "section_title": sec_title,
+                    "items": items_task,
+                })
+
+            items_quiz = [
+                {
+                    "id": q["quiz_id"],
+                    "title": q["quiz_title"] or "Quiz Tanpa Judul",
+                    "passing_grade": float(q["passing_grade"]) if q["passing_grade"] is not None else 0.0,
+                }
+                for q in quizzes_by_section.get(sec_id, [])
+            ]
+            if items_quiz:
+                quiz_sections_payload.append({
+                    "section_id": sec_id,
+                    "section_title": sec_title,
+                    "items": items_quiz,
+                })
+
+        # ==== Build workbook ====
+        wb = Workbook()
+        ws_task = wb.active
+        ws_task.title = "Nilai Tugas"
+        ws_quiz = wb.create_sheet(title="Nilai Quiz")
+
+        generated_at_wib = datetime.now(WIB).strftime("%d %B %Y %H:%M WIB")
+        course_meta = {
+            "course_title": course["course_title"] or "Tanpa Judul",
+            "category_name": course["category_name"] or "Umum",
+            "instructor_name": course["instructor_name"] or "Unassigned",
+            "generated_at_wib": generated_at_wib,
+        }
+        student_meta = {
+            "nisn": student["nisn"],
+            "full_name": student["full_name"],
+        }
+
+        _build_child_grades_sheet(
+            ws_task, "task", course_meta, student_meta,
+            task_sections_payload, submissions_map
+        )
+        _build_child_grades_sheet(
+            ws_quiz, "quiz", course_meta, student_meta,
+            quiz_sections_payload, attempts_map
+        )
+
+        buffer = io.BytesIO()
+        wb.save(buffer)
+        buffer.seek(0)
+        content_b64 = base64.b64encode(buffer.getvalue()).decode("ascii")
+        buffer.close()
+
+        timestamp = datetime.now(WIB).strftime("%Y%m%d_%H%M%S")
+        safe_student = re.sub(r"[^\w\s\-]", "", (student["full_name"] or "Siswa")).strip().replace(" ", "_")
+        safe_title = re.sub(r"[^\w\s\-]", "", (course["course_title"] or "Course")).strip().replace(" ", "_")
+        filename = f"Nilai_{safe_student}_{safe_title}_{timestamp}.xlsx"
+
+        return {
+            "status": "success",
+            "filename": filename,
+            "content_b64": content_b64,
+        }
+
+    except Exception as e:
+        frappe.logger("bima_lms").error(f"Error export_child_course_grades: {str(e)}")
+        import traceback
+        frappe.logger("bima_lms").error(traceback.format_exc())
+        frappe.throw(f"Gagal mengekspor nilai: {str(e)}")
+    finally:
+        conn.close()

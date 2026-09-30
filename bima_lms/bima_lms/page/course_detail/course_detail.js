@@ -452,7 +452,8 @@ function formatLiveClassStartTime(startTime) {
 
 function applyViewerPermissions() {
     const isParent = Boolean(currentCourseData && currentCourseData.is_parent);
-    $('#btn-assign-rombel, #btn-enable-edit, #btn-export-course').toggleClass('hidden', isParent);
+    // Hanya sembunyikan assign & edit; export tetap tampil untuk parent (nilai anak)
+    $('#btn-assign-rombel, #btn-enable-edit').toggleClass('hidden', isParent);
     if (isParent) $('#edit-mode-actions').addClass('hidden');
 }
 
@@ -750,6 +751,16 @@ function handleExportCourseGrades() {
         return;
     }
 
+    const isParent = Boolean(currentCourseData.is_parent);
+
+    if (isParent) {
+        handleExportChildGrades();
+    } else {
+        handleExportAllGrades();
+    }
+}
+
+function handleExportAllGrades() {
     frappe.confirm(
         __('Export nilai course "{0}" ke file Excel?', [currentCourseData.course_title || '']),
         function() {
@@ -769,6 +780,45 @@ function handleExportCourseGrades() {
                 error: function(err) {
                     console.error('[Export Grades] Error:', err);
                     frappe.msgprint(__('Terjadi kesalahan saat mengekspor nilai course.'));
+                }
+            });
+        }
+    );
+}
+
+function handleExportChildGrades() {
+    const studentId = window.StudentSwitcher ? window.StudentSwitcher.getActiveStudentId() : null;
+
+    if (!studentId) {
+        frappe.msgprint(__('Pilih akun anak terlebih dahulu.'));
+        return;
+    }
+
+    frappe.confirm(
+        __('Export nilai anak Anda pada course "{0}" ke file Excel?', [currentCourseData.course_title || '']),
+        function() {
+            frappe.call({
+                method: 'bima_lms.api.section_details.export_child_course_grades',
+                args: {
+                    course_id: currentCourseData.course_id,
+                    student_id: studentId
+                },
+                freeze: true,
+                freeze_message: __('Menyiapkan file Excel...'),
+                callback: function(r) {
+                    if (!r.message || r.message.status !== 'success') {
+                        frappe.msgprint(__('Gagal mengekspor nilai.'));
+                        return;
+                    }
+                    triggerBase64Download(r.message.content_b64, r.message.filename);
+                    frappe.show_alert({ message: __('File Excel berhasil dibuat.'), indicator: 'green' });
+                },
+                error: function(err) {
+                    console.error('[Export Child Grades] Error:', err);
+                    const msg = (err && err._server_messages)
+                        ? JSON.parse(err._server_messages).map(m => JSON.parse(m).message).join('<br>')
+                        : __('Terjadi kesalahan saat mengekspor nilai.');
+                    frappe.msgprint(msg);
                 }
             });
         }
