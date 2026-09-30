@@ -44,12 +44,19 @@ frappe.pages['course-detail'].on_page_load = function(wrapper) {
                             </svg>
                             <span>Assign to Rombel</span>
                         </button>
+
+                        <button id="btn-export-course" class="inline-flex items-center space-x-2 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg shadow-sm transition-colors">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"></path>
+                            </svg>
+                            <span>Export</span>
+                        </button>
                     
                         <button id="btn-enable-edit" class="inline-flex items-center space-x-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg shadow-sm transition-colors">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
                             </svg>
-                            <span>Edit Course</span>
+                            <span>Edit</span>
                         </button>
 
                         <div id="edit-mode-actions" class="hidden flex items-center space-x-2">
@@ -245,6 +252,7 @@ frappe.pages['course-detail'].on_page_load = function(wrapper) {
     $('#btn-cancel-edit').on('click', toggleViewMode);
     $('#btn-save-course').on('click', handleSaveCourse);
     $('#btn-assign-rombel').on('click', openAssignRombelModal);
+    $('#btn-export-course').on('click', handleExportCourseGrades);
     $('#live-class-link').on('click', function() {
         const url = $(this).data('url');
         if (url && !$(this).prop('disabled')) window.open(url, '_blank', 'noopener,noreferrer');
@@ -444,7 +452,7 @@ function formatLiveClassStartTime(startTime) {
 
 function applyViewerPermissions() {
     const isParent = Boolean(currentCourseData && currentCourseData.is_parent);
-    $('#btn-assign-rombel, #btn-enable-edit').toggleClass('hidden', isParent);
+    $('#btn-assign-rombel, #btn-enable-edit, #btn-export-course').toggleClass('hidden', isParent);
     if (isParent) $('#edit-mode-actions').addClass('hidden');
 }
 
@@ -734,6 +742,67 @@ function handleSaveCourse() {
             });
         }
     );
+}
+
+function handleExportCourseGrades() {
+    if (!currentCourseData || !currentCourseData.course_id) {
+        frappe.msgprint(__('Data course belum siap.'));
+        return;
+    }
+
+    frappe.confirm(
+        __('Export nilai course "{0}" ke file Excel?', [currentCourseData.course_title || '']),
+        function() {
+            frappe.call({
+                method: 'bima_lms.api.section_details.export_course_grades',
+                args: { course_id: currentCourseData.course_id },
+                freeze: true,
+                freeze_message: __('Menyiapkan file Excel...'),
+                callback: function(r) {
+                    if (!r.message || r.message.status !== 'success') {
+                        frappe.msgprint(__('Gagal mengekspor nilai course.'));
+                        return;
+                    }
+                    triggerBase64Download(r.message.content_b64, r.message.filename);
+                    frappe.show_alert({ message: __('File Excel berhasil dibuat.'), indicator: 'green' });
+                },
+                error: function(err) {
+                    console.error('[Export Grades] Error:', err);
+                    frappe.msgprint(__('Terjadi kesalahan saat mengekspor nilai course.'));
+                }
+            });
+        }
+    );
+}
+
+function triggerBase64Download(base64Data, filename) {
+    // Decode base64 ke binary string, lalu ke Uint8Array
+    const binaryStr = atob(base64Data);
+    const len = binaryStr.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+    }
+
+    // MIME type untuk .xlsx
+    const blob = new Blob([bytes], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    });
+
+    const url = URL.createObjectURL(blob);
+    const $link = $('<a>', {
+        href: url,
+        download: filename || 'export.xlsx',
+        style: 'display: none;'
+    }).appendTo(document.body);
+
+    $link[0].click();
+
+    // Cleanup
+    setTimeout(function() {
+        URL.revokeObjectURL(url);
+        $link.remove();
+    }, 1500);
 }
 
 function escapeHtml(text) {
