@@ -602,6 +602,7 @@ def get_course_score_chart_data(student_id=None):
             LEFT JOIN lms.assignment_submissions sub 
                 ON sub.assignment_id = al.assignment_id 
                 AND sub.student_id = cs.student_id
+                AND sub.is_latest = TRUE
             ORDER BY cs.student_name ASC, al.assignment_id ASC;
         """
         

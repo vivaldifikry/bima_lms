@@ -252,16 +252,19 @@ def get_section_detail(section_id, active_student_id=None):
             cursor.execute("""
                 SELECT sub.submission_id, sub.assignment_id, sub.submitted_at,
                        sub.file_path, sub.score, sub.feedback_notes,
+                       sub.revision_number, sub.revision_status, sub.revision_note,
+                       sub.is_latest, sub.requested_at,
+                       sub.student_id,
                        s.full_name AS student_name, s.nisn
                 FROM lms.assignment_submissions sub
                 JOIN kelaskita.students s ON s.id = sub.student_id
                 WHERE sub.assignment_id = ANY(%s)
                   AND (%s = false OR sub.student_id = %s)
-                ORDER BY submitted_at DESC
+                ORDER BY sub.assignment_id, sub.revision_number DESC
             """, ([assignment["assignment_id"] for assignment in assignments], is_parent, active_student_id))
             for submission in cursor.fetchall():
                 if is_parent:
-                    submissions.setdefault(submission["assignment_id"], submission)
+                    submissions.setdefault(submission["assignment_id"], []).append(submission)
                 else:
                     submissions.setdefault(submission["assignment_id"], []).append(submission)
 
@@ -302,12 +305,37 @@ def get_section_detail(section_id, active_student_id=None):
                 "lesson_code": lesson["lesson_code"] or ""
             })
 
+        def _serialize_submission(sub):
+            return {
+                "submission_id": sub["submission_id"],
+                "student_id": sub.get("student_id"),
+                "student_name": sub.get("student_name") or "Tanpa Nama",
+                "nisn": sub.get("nisn") or "-",
+                "submitted_at": as_wib_iso(sub["submitted_at"]),
+                "file_path": generate_minio_presigned_url(sub["file_path"]),
+                "score": float(sub["score"]) if sub["score"] is not None else None,
+                "feedback_notes": sub["feedback_notes"] or "",
+                "revision_number": int(sub["revision_number"] or 1),
+                "revision_status": sub["revision_status"] or "submitted",
+                "revision_note": sub["revision_note"] or "",
+                "is_latest": bool(sub["is_latest"]),
+                "requested_at": as_wib_iso(sub["requested_at"]),
+            }
+
         for assignment in assignments:
-            parent_submission = submissions.get(assignment["assignment_id"]) if is_parent else {}
-            parent_file_path = (parent_submission or {}).get("file_path")
-            
-            result["assignments"].append({
-                "assignment_id": assignment["assignment_id"],
+            aid = assignment["assignment_id"]
+            sub_list = submissions.get(aid) or []
+
+            # Parent: cari yang is_latest untuk detail "submission aktif"
+            parent_latest = next((s for s in sub_list if s.get("is_latest")), None) if is_parent else None
+            parent_file_path = (parent_latest or {}).get("file_path")
+
+            # Cari submission terbaru (revision_number tertinggi) untuk seluruh role,
+            # dipakai untuk render tombol & status di UI guru
+            latest_sub = next((s for s in sub_list if s.get("is_latest")), None)
+
+            assignment_payload = {
+                "assignment_id": aid,
                 "course_id": assignment["course_id"],
                 "section_id": assignment["section_id"],
                 "title": assignment["title"] or "Tanpa Judul",
@@ -316,23 +344,51 @@ def get_section_detail(section_id, active_student_id=None):
                 "display_order": assignment["display_order"],
                 "deadline": assignment["deadline"].isoformat() if assignment["deadline"] else None,
                 "max_score": float(assignment["max_score"]) if assignment["max_score"] is not None else 100.0,
-                "submitted_at": as_wib_iso((parent_submission or {}).get("submitted_at")),
-                "submission_file_path": generate_minio_presigned_url(parent_file_path) if parent_file_path else None,
-                "score": float(parent_submission["score"]) if parent_submission and parent_submission["score"] is not None else None,
-                "feedback_notes": (parent_submission or {}).get("feedback_notes") or "",
-                "submissions": [
-                    {
-                        "submission_id": submission["submission_id"],
-                        "student_name": submission["student_name"] or "Tanpa Nama",
-                        "nisn": submission["nisn"] or "-",
-                        "submitted_at": as_wib_iso(submission["submitted_at"]),
-                        "file_path": generate_minio_presigned_url(submission["file_path"]),
-                        "score": float(submission["score"]) if submission["score"] is not None else None,
-                        "feedback_notes": submission["feedback_notes"] or ""
-                    }
-                    for submission in (submissions.get(assignment["assignment_id"]) or [])
-                ] if is_teacher else []
-            })
+            }
+
+            if is_parent:
+                # Field khusus parent (kompatibilitas dengan UI lama + tambahan)
+                assignment_payload.update({
+                    "submitted_at": as_wib_iso((parent_latest or {}).get("submitted_at")),
+                    "submission_file_path": generate_minio_presigned_url(parent_file_path) if parent_file_path else None,
+                    "score": float(parent_latest["score"]) if parent_latest and parent_latest["score"] is not None else None,
+                    "feedback_notes": (parent_latest or {}).get("feedback_notes") or "",
+                    "revision_number": int((parent_latest or {}).get("revision_number") or 0),
+                    "revision_status": (parent_latest or {}).get("revision_status") or None,
+                    "revision_note": (parent_latest or {}).get("revision_note") or "",
+                    "requested_at": as_wib_iso((parent_latest or {}).get("requested_at")),
+                    # Daftar seluruh revisi (untuk histori)
+                    "submission_history": [_serialize_submission(s) for s in sub_list],
+                })
+
+            else:
+                # Guru/Admin: group submissions per siswa
+                grouped = {}
+                for sub in sub_list:
+                    serialized = _serialize_submission(sub)
+                    sid = sub["student_id"]
+                    if sid not in grouped:
+                        grouped[sid] = {
+                            "student_id": sid,
+                            "student_name": serialized["student_name"],
+                            "nisn": serialized["nisn"],
+                            "submissions": [],
+                        }
+                    grouped[sid]["submissions"].append(serialized)
+
+                # Sort students by name
+                assignment_payload["student_submissions"] = sorted(
+                    grouped.values(),
+                    key=lambda g: (g["student_name"] or "").lower()
+                )
+                if latest_sub:
+                    assignment_payload["latest_status"] = latest_sub["revision_status"] or "submitted"
+                    assignment_payload["has_any_submission"] = True
+                else:
+                    assignment_payload["latest_status"] = None
+                    assignment_payload["has_any_submission"] = False
+
+            result["assignments"].append(assignment_payload)
 
         quizzes_by_id = {}
         for row in quiz_rows:
@@ -463,41 +519,65 @@ def submit_assignment_minio(assignment_id, student_id, file_name, file_data):
             if not assignment:
                 frappe.throw("Tugas tidak ditemukan.", frappe.DoesNotExistError)
 
+            # Ambil submission terbaru (is_latest = TRUE)
             cur.execute("""
-                SELECT submission_id, submitted_at
+                SELECT submission_id, submitted_at, revision_number, revision_status
                 FROM lms.assignment_submissions
-                WHERE assignment_id = %s AND student_id = %s
+                WHERE assignment_id = %s AND student_id = %s AND is_latest = TRUE
                 LIMIT 1
+                FOR UPDATE
             """, (assignment_id, student_id))
-            existing = cur.fetchone()
-            if existing:
-                return {
-                    "status": "already_submitted",
-                    "submitted_at": as_wib_iso(existing["submitted_at"])
-                }
+            latest = cur.fetchone()
 
-            # Simpan nama object MinIO ke kolom file_path database
+            if latest:
+                # Sudah ada submission aktif — cek apakah boleh upload revisi
+                if latest["revision_status"] != "revision_requested":
+                    return {
+                        "status": "already_submitted",
+                        "submitted_at": as_wib_iso(latest["submitted_at"]),
+                        "message": "Guru belum meminta revisi, Anda tidak dapat mengunggah ulang."
+                    }
+
+                # Set row lama is_latest = FALSE
+                cur.execute("""
+                    UPDATE lms.assignment_submissions
+                    SET is_latest = FALSE
+                    WHERE submission_id = %s
+                """, (latest["submission_id"],))
+
+                next_revision_number = int(latest["revision_number"] or 1) + 1
+                new_status = "revision_submitted"
+            else:
+                next_revision_number = 1
+                new_status = "submitted"
+
             cur.execute("""
                 INSERT INTO lms.assignment_submissions
                     (assignment_id, student_id, file_path, submitted_at, is_late,
-                     score, feedback_notes, graded_by, graded_at)
+                     score, feedback_notes, graded_by, graded_at,
+                     revision_number, revision_status, is_latest)
                 VALUES (%s, %s, %s, NOW() AT TIME ZONE 'Asia/Jakarta',
                     (%s IS NOT NULL AND (NOW() AT TIME ZONE 'Asia/Jakarta') > %s),
-                    NULL, NULL, NULL, NULL)
-                RETURNING submission_id, submitted_at
+                    NULL, NULL, NULL, NULL,
+                    %s, %s, TRUE)
+                RETURNING submission_id, submitted_at, revision_number
             """, (
                 assignment_id,
                 student_id,
                 minio_object_name,
                 assignment["deadline"],
-                assignment["deadline"]
+                assignment["deadline"],
+                next_revision_number,
+                new_status,
             ))
             submission = cur.fetchone()
+
         conn.commit()
         return {
             "status": "success",
             "submission_id": submission["submission_id"],
-            "submitted_at": as_wib_iso(submission["submitted_at"])
+            "submitted_at": as_wib_iso(submission["submitted_at"]),
+            "revision_number": int(submission["revision_number"] or 1),
         }
     except Exception as e:
         conn.rollback()
@@ -1133,7 +1213,8 @@ def grade_assignment_submission(submission_id, score, feedback_notes=None):
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             current_user_id = get_current_user_id(conn)
             cur.execute("""
-                SELECT sub.submission_id, a.max_score, c.instructor_id
+                SELECT sub.submission_id, sub.is_latest, sub.revision_status,
+                       a.max_score, c.instructor_id
                 FROM lms.assignment_submissions sub
                 JOIN lms.assignments a ON a.assignment_id = sub.assignment_id
                 JOIN lms.course_sections cs ON cs.section_id = a.section_id
@@ -1151,12 +1232,25 @@ def grade_assignment_submission(submission_id, score, feedback_notes=None):
             if score_value < 0 or score_value > max_score:
                 frappe.throw(f"Nilai harus berada di antara 0 dan {max_score}.", frappe.ValidationError)
 
+            if not submission["is_latest"]:
+                frappe.throw(
+                    "Submission ini bukan yang terbaru. Hanya submission terbaru yang dapat dinilai.",
+                    frappe.PermissionError
+                )
+
+            if submission["revision_status"] == "revision_requested":
+                frappe.throw(
+                    "Permintaan revisi sudah dikirim. Nilai tidak dapat diubah sampai siswa mengirim revisi baru.",
+                    frappe.PermissionError
+                )
+
             cur.execute("""
                 UPDATE lms.assignment_submissions
                 SET score = %s,
                     feedback_notes = %s,
                     graded_by = %s,
-                    graded_at = NOW() AT TIME ZONE 'Asia/Jakarta'
+                    graded_at = NOW() AT TIME ZONE 'Asia/Jakarta',
+                    revision_status = 'graded'
                 WHERE submission_id = %s
             """, (score_value, feedback_notes or None, current_user_id, submission_id))
         conn.commit()
@@ -1168,6 +1262,77 @@ def grade_assignment_submission(submission_id, score, feedback_notes=None):
     finally:
         conn.close()
 
+@frappe.whitelist()
+def request_assignment_revision(submission_id, revision_note=None):
+    """Guru minta revisi pada submission yang sudah dinilai."""
+    if not submission_id:
+        frappe.throw("Submission tidak ditemukan.", frappe.MandatoryError)
+
+    revision_note = (revision_note or "").strip()
+    if not revision_note:
+        frappe.throw("Catatan revisi wajib diisi.", frappe.ValidationError)
+
+    user_roles = frappe.get_roles(frappe.session.user)
+    is_admin = frappe.session.user == "Administrator" or any(
+        role in user_roles for role in ["LMS Admin", "System Manager"]
+    )
+    if not is_admin and "LMS Teacher" not in user_roles:
+        frappe.throw("Anda tidak memiliki akses untuk meminta revisi.", frappe.PermissionError)
+
+    conn = get_pg_connection()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            current_user_id = get_current_user_id(conn)
+
+            cur.execute("""
+                SELECT sub.submission_id, sub.is_latest, sub.revision_status,
+                       sub.score, c.instructor_id
+                FROM lms.assignment_submissions sub
+                JOIN lms.assignments a ON a.assignment_id = sub.assignment_id
+                JOIN lms.course_sections cs ON cs.section_id = a.section_id
+                JOIN lms.courses c ON c.course_id = cs.course_id
+                WHERE sub.submission_id = %s AND a.is_deleted = false
+                FOR UPDATE
+            """, (submission_id,))
+            sub = cur.fetchone()
+            if not sub:
+                frappe.throw("Submission tidak ditemukan.", frappe.DoesNotExistError)
+
+            if not is_admin and sub["instructor_id"] != current_user_id:
+                frappe.throw("Anda hanya dapat meminta revisi pada course sendiri.", frappe.PermissionError)
+
+            if not sub["is_latest"]:
+                frappe.throw("Submission ini bukan yang terbaru.", frappe.ValidationError)
+
+            if sub["revision_status"] != "graded":
+                frappe.throw(
+                    "Revisi hanya dapat diminta setelah submission dinilai.",
+                    frappe.ValidationError
+                )
+
+            if sub["score"] is None:
+                frappe.throw(
+                    "Nilai harus diisi terlebih dahulu sebelum meminta revisi.",
+                    frappe.ValidationError
+                )
+
+            cur.execute("""
+                UPDATE lms.assignment_submissions
+                SET revision_status = 'revision_requested',
+                    revision_note = %s,
+                    requested_by = %s,
+                    requested_at = NOW() AT TIME ZONE 'Asia/Jakarta'
+                WHERE submission_id = %s
+            """, (revision_note, current_user_id, submission_id))
+
+        conn.commit()
+        return {"status": "success", "message": "Permintaan revisi berhasil dikirim."}
+    except Exception as e:
+        conn.rollback()
+        frappe.logger("bima_lms").error(f"Error request_assignment_revision: {str(e)}")
+        frappe.throw(f"Gagal meminta revisi: {str(e)}")
+    finally:
+        conn.close()
 
 def get_embed_video_url(url):
     if not url:
@@ -1482,7 +1647,7 @@ def _build_grades_sheet(ws, sheet_kind, course_meta, sections_payload, students)
     sheet_kind: 'task' atau 'quiz'
     """
     is_task = (sheet_kind == "task")
-    cells_per_item = 4 if is_task else 3
+    cells_per_item = 5 if is_task else 3
 
     total_item_cells = sum(len(sec["items"]) * cells_per_item for sec in sections_payload)
     total_columns = 2 + max(total_item_cells, 1)
@@ -1583,7 +1748,7 @@ def _build_grades_sheet(ws, sheet_kind, course_meta, sections_payload, students)
 
             # Row 8: Sub-header
             if is_task:
-                subheaders = ["Tanggal Submit", "Status Telat", "Nilai Tugas", "Catatan"]
+                subheaders = ["Tanggal Submit", "Status Telat", "Revisi Ke", "Nilai Tugas", "Catatan"]
             else:
                 subheaders = ["Tanggal Submit", "Nilai Quiz", "Status Quiz"]
 
@@ -1668,7 +1833,16 @@ def _build_grades_sheet(ws, sheet_kind, course_meta, sections_payload, students)
                     c.border = _border_thin_all()
                     col_idx += 1
 
-                    # Kolom 3: Nilai tugas (orange kalau belum dinilai)
+                    # Kolom 3: Rev. (revision_number - 1, kosong kalau 0)
+                    rev_val = (res.get("revision_number") or 1) - 1
+                    c = ws.cell(row=row_cursor, column=col_idx)
+                    if rev_val > 0:
+                        c.value = rev_val
+                    c.alignment = Alignment(horizontal="center", vertical="top")
+                    c.border = _border_thin_all()
+                    col_idx += 1
+
+                    # Kolom 4: Nilai tugas
                     c = ws.cell(row=row_cursor, column=col_idx)
                     if score is not None:
                         c.value = float(score)
@@ -1678,7 +1852,7 @@ def _build_grades_sheet(ws, sheet_kind, course_meta, sections_payload, students)
                     c.border = _border_thin_all()
                     col_idx += 1
 
-                    # Kolom 4: Catatan
+                    # Kolom 5: Catatan
                     if submitted_at and score is None:
                         note = "Belum Dinilai"
                         c = ws.cell(row=row_cursor, column=col_idx, value=note)
@@ -1735,8 +1909,9 @@ def _build_grades_sheet(ws, sheet_kind, course_meta, sections_payload, students)
             if is_task:
                 ws.column_dimensions[get_column_letter(col_width_cursor)].width = 22      # tanggal submit (lebih lebar)
                 ws.column_dimensions[get_column_letter(col_width_cursor + 1)].width = 12  # status telat
-                ws.column_dimensions[get_column_letter(col_width_cursor + 2)].width = 12  # nilai
-                ws.column_dimensions[get_column_letter(col_width_cursor + 3)].width = 26  # catatan
+                ws.column_dimensions[get_column_letter(col_width_cursor + 2)].width = 12  # Revisi Ke
+                ws.column_dimensions[get_column_letter(col_width_cursor + 3)].width = 10  # nilai
+                ws.column_dimensions[get_column_letter(col_width_cursor + 4)].width = 26  # catatan
             else:
                 ws.column_dimensions[get_column_letter(col_width_cursor)].width = 22      # tanggal submit
                 ws.column_dimensions[get_column_letter(col_width_cursor + 1)].width = 12  # nilai
@@ -1858,10 +2033,12 @@ def export_course_grades(course_id):
                 cur.execute("""
                     SELECT
                         sub.assignment_id, sub.student_id, sub.submitted_at,
-                        sub.is_late, sub.score, sub.feedback_notes
+                        sub.is_late, sub.score, sub.feedback_notes,
+                        sub.revision_number
                     FROM lms.assignment_submissions sub
                     WHERE sub.assignment_id = ANY(%s)
                       AND sub.student_id = ANY(%s)
+                      AND sub.is_latest = TRUE
                 """, (assignment_ids, student_ids))
                 for row in cur.fetchall():
                     submissions_map[(row["assignment_id"], row["student_id"])] = {
@@ -1869,6 +2046,7 @@ def export_course_grades(course_id):
                         "is_late": row["is_late"],
                         "score": row["score"],
                         "feedback_notes": row["feedback_notes"],
+                        "revision_number": int(row["revision_number"] or 1),
                     }
 
             # ==== Ambil quizzes per section ====
@@ -2070,7 +2248,7 @@ def _build_child_grades_sheet(ws, sheet_kind, course_meta, student_meta, section
     dark_bold_small = Font(bold=True, color="111827", size=11)
 
     if is_task:
-        headers = ["Bab", "Nama Tugas", "Deadline", "Tanggal Submit", "Status Telat", "Nilai", "Catatan"]
+        headers = ["Bab", "Nama Tugas", "Deadline", "Tanggal Submit", "Status Telat", "Revisi Ke", "Nilai", "Catatan"]
     else:
         headers = ["Bab", "Nama Quiz", "Passing Grade", "Tanggal Submit", "Nilai", "Status"]
 
@@ -2141,9 +2319,17 @@ def _build_child_grades_sheet(ws, sheet_kind, course_meta, student_meta, section
                 c.alignment = Alignment(horizontal="center", vertical="center")
                 c.border = _border_thin_all()
 
-                # Kolom F: Nilai
-                score = res.get("score")
+                # Kolom F: Rev.
+                rev_val = (res.get("revision_number") or 1) - 1
                 c = ws.cell(row=row_cursor, column=6)
+                if rev_val > 0:
+                    c.value = rev_val
+                c.alignment = Alignment(horizontal="center", vertical="center")
+                c.border = _border_thin_all()
+
+                # Kolom G: Nilai
+                score = res.get("score")
+                c = ws.cell(row=row_cursor, column=7)
                 if score is not None:
                     c.value = float(score)
                 elif submitted_at is not None:
@@ -2151,13 +2337,13 @@ def _build_child_grades_sheet(ws, sheet_kind, course_meta, student_meta, section
                 c.alignment = Alignment(horizontal="center", vertical="center")
                 c.border = _border_thin_all()
 
-                # Kolom G: Catatan
+                # Kolom H: Catatan
                 if submitted_at and score is None:
                     note = "Belum Dinilai"
-                    c = ws.cell(row=row_cursor, column=7, value=note)
+                    c = ws.cell(row=row_cursor, column=8, value=note)
                     c.fill = fill_ungraded
                 else:
-                    c = ws.cell(row=row_cursor, column=7, value=res.get("feedback_notes") or "")
+                    c = ws.cell(row=row_cursor, column=8, value=res.get("feedback_notes") or "")
                 c.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
                 c.border = _border_thin_all()
 
@@ -2229,8 +2415,9 @@ def _build_child_grades_sheet(ws, sheet_kind, course_meta, student_meta, section
         ws.column_dimensions["C"].width = 22   # Deadline
         ws.column_dimensions["D"].width = 22   # Tgl Submit
         ws.column_dimensions["E"].width = 12   # Status Telat
-        ws.column_dimensions["F"].width = 10   # Nilai
-        ws.column_dimensions["G"].width = 30   # Catatan
+        ws.column_dimensions["F"].width = 12   # Rev
+        ws.column_dimensions["G"].width = 10   # Nilai
+        ws.column_dimensions["H"].width = 30   # Catatan
     else:
         ws.column_dimensions["C"].width = 14   # Passing Grade
         ws.column_dimensions["D"].width = 22   # Tgl Submit
@@ -2347,9 +2534,11 @@ def export_child_course_grades(course_id, student_id):
             submissions_map = {}
             if assignment_ids:
                 cur.execute("""
-                    SELECT assignment_id, submitted_at, is_late, score, feedback_notes
+                    SELECT assignment_id, submitted_at, is_late, score, feedback_notes,
+                           revision_number
                     FROM lms.assignment_submissions
                     WHERE assignment_id = ANY(%s) AND student_id = %s
+                      AND is_latest = TRUE
                 """, (assignment_ids, student_id))
                 for row in cur.fetchall():
                     submissions_map[row["assignment_id"]] = {
@@ -2357,6 +2546,7 @@ def export_child_course_grades(course_id, student_id):
                         "is_late": row["is_late"],
                         "score": row["score"],
                         "feedback_notes": row["feedback_notes"],
+                        "revision_number": int(row["revision_number"] or 1),
                     }
 
             # ==== Quizzes per section ====

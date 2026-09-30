@@ -429,6 +429,49 @@ function bindGlobalEvents() {
         activeQuiz.questions[Number(card.data('question-index'))].options[Number($(this).data('option-index'))].option_text = $(this).val();
     });
 
+    $(document).off('click', '.btn-request-revision').on('click', '.btn-request-revision', function() {
+        const $row = $(this).closest('.submission-grade-row');
+        if ($row.data('editable') !== 1) return;
+
+        const submissionId = $(this).data('submission-id');
+        if (!submissionId) return;
+
+        const dialog = new frappe.ui.Dialog({
+            title: __('Minta Revisi'),
+            fields: [
+                {
+                    fieldname: 'revision_note',
+                    fieldtype: 'Text',
+                    label: __('Catatan Revisi (wajib diisi)'),
+                    reqd: 1,
+                    description: __('Jelaskan bagian apa yang perlu diperbaiki oleh siswa.'),
+                }
+            ],
+            primary_action_label: __('Kirim'),
+            primary_action(values) {
+                const note = (values.revision_note || '').trim();
+                if (!note) {
+                    frappe.msgprint(__('Catatan revisi wajib diisi.'));
+                    return;
+                }
+                dialog.hide();
+                frappe.call({
+                    method: 'bima_lms.api.section_details.request_assignment_revision',
+                    args: { submission_id: submissionId, revision_note: note },
+                    freeze: true,
+                    freeze_message: __('Mengirim permintaan revisi...'),
+                    callback: function(response) {
+                        if (response.message && response.message.status === 'success') {
+                            frappe.show_alert({ message: __('Permintaan revisi berhasil dikirim'), indicator: 'green' });
+                            loadSectionDetail(currentSectionId);
+                        }
+                    }
+                });
+            }
+        });
+        dialog.show();
+    });
+
         // === Media soal quiz: input URL ===
     $(document).off('input', '.quiz-edit-url-image').on('input', '.quiz-edit-url-image', function() {
         const idx = Number($(this).data('question-index'));
@@ -834,6 +877,7 @@ function bindGlobalEvents() {
 
     $(document).off('click', '.btn-edit-grade').on('click', '.btn-edit-grade', function() {
         const $row = $(this).closest('.submission-grade-row');
+        if ($row.data('editable') !== 1) return;
         $row.data('original-score', $row.find('.input-submission-score').val());
         $row.data('original-feedback', $row.find('.input-submission-feedback').val());
         $row.find('.input-submission-score, .input-submission-feedback').prop('disabled', false);
@@ -853,6 +897,7 @@ function bindGlobalEvents() {
 
     $(document).off('click', '.btn-submit-grade').on('click', '.btn-submit-grade', function() {
         const $row = $(this).closest('.submission-grade-row');
+        if ($row.data('editable') !== 1) return;
         const score = $row.find('.input-submission-score').val();
         if (!isValidSubmissionScore(score, Number($row.data('max-score')))) return;
 
@@ -1698,75 +1743,247 @@ function formatDatetimeInput(dateStr) {
 
 function renderAssignmentSubmissionControl(assignment) {
     if (currentSectionData.is_teacher) {
-        if (!assignment.submissions || !assignment.submissions.length) {
+        const studentSubs = assignment.student_submissions || [];
+        if (!studentSubs.length) {
             return '<p class="border-t border-gray-100 pt-4 text-sm text-gray-500">Belum ada siswa yang mengumpulkan tugas.</p>';
         }
         return `<div class="border-t border-gray-100 pt-4 space-y-4">
-            ${assignment.submissions.map(submission => renderSubmissionGradeRow(submission, assignment.max_score)).join('')}
+            ${studentSubs.map(group => renderStudentSubmissionGroup(group, assignment.max_score)).join('')}
         </div>`;
     }
 
     if (!currentSectionData.is_parent) return '';
 
-    if (assignment.submitted_at) {
-        const submittedFileUrl = assignment.submission_file_path ? escapeHtml(assignment.submission_file_path) : '';
-        return `<div class="border-t border-gray-100 pt-4 space-y-3">
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
-                <div class="space-y-1">
-                    <span class="text-sm font-semibold text-emerald-700">Anda sudah mengumpulkan tugas </span> <span class="text-xs text-gray-500">pada ${formatSubmissionDate(assignment.submitted_at)}</span>
-            ${submittedFileUrl ? `<a href="${submittedFileUrl}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 text-sm font-semibold text-indigo-600 hover:text-indigo-800 hover:underline">
-                <span>Lihat tugas Anda</span>
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4m-4-8h6m0 0v6m0-6L10 14"></path></svg>
-            </a>` : ''}
-                </div>
-                <div class="sm:text-right text-sm">
-                    <span class="text-gray-500">Nilai</span>
-                    <p class="font-bold text-gray-900">${assignment.score === null || assignment.score === undefined ? '-' : assignment.score}</p>
-                </div>
+    const history = assignment.submission_history || [];
+    const latestStatus = assignment.revision_status;
+    const latestRevNum = Number(assignment.revision_number || 0);
+    const canUploadRevision = latestStatus === 'revision_requested';
+    const canUploadFirst = history.length === 0;
+
+    // Tombol upload (pertama kali atau revisi)
+    let uploadBlock = '';
+    if (canUploadFirst) {
+        uploadBlock = `<div class="mt-3 flex justify-end">
+            <button type="button" class="btn-upload-assignment inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-colors" data-assignment-id="${assignment.assignment_id}">
+                <span>Upload File Jawaban</span>
+            </button>
+        </div>`;
+    } else if (canUploadRevision) {
+        uploadBlock = `<div class="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2">
+            <p class="text-sm font-semibold text-amber-800">Guru meminta revisi</p>
+            ${assignment.revision_note ? `<p class="text-xs text-amber-700 whitespace-pre-line">${escapeHtml(assignment.revision_note)}</p>` : ''}
+            <div class="flex justify-end">
+                <button type="button" class="btn-upload-assignment inline-flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium rounded-lg transition-colors" data-assignment-id="${assignment.assignment_id}">
+                    <span>Upload Revisi</span>
+                </button>
             </div>
-            ${assignment.feedback_notes ? `<div class="rounded-lg bg-gray-50 border border-gray-200 px-3 py-2 text-sm text-gray-700 whitespace-pre-line">
-                <span class="font-semibold text-gray-900">Catatan guru</span>
-                <p class="mt-1">${escapeHtml(assignment.feedback_notes)}</p>
-            </div>` : ''}
         </div>`;
     }
 
-    return `<div class="border-t border-gray-100 pt-4 flex justify-end">
-        <button type="button" class="btn-upload-assignment inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-colors" data-assignment-id="${assignment.assignment_id}">
-            <span>Upload File Jawaban</span>
-        </button>
+    // Render histori (terbaru di atas)
+    const historyHtml = history.map(function(sub, idx) {
+        const isLatest = Boolean(sub.is_latest);
+        const badgeLabel = sub.revision_number <= 1 ? 'Pengumpulan Awal' : `Revisi #${sub.revision_number - 1}`;
+        const isLatestBadge = isLatest ? '<span class="ml-2 inline-block rounded bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">Terbaru</span>' : '';
+        const statusBadge = renderRevisionStatusBadge(sub.revision_status);
+
+        return `<div class="rounded-lg border ${isLatest ? 'border-emerald-300' : (sub.revision_number > 1 ? 'border-indigo-200' : 'border-gray-200')} bg-white p-3 space-y-2">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="flex items-center">
+                    <span class="inline-block rounded bg-indigo-50 px-2 py-0.5 text-xs font-bold text-indigo-700">${badgeLabel}</span>
+                    ${isLatestBadge}
+                </div>
+                <div>${statusBadge}</div>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 items-start text-sm">
+                <div class="space-y-1">
+                    <span class="text-gray-600 text-xs">Submit: ${formatSubmissionDate(sub.submitted_at)}</span>
+                    ${sub.file_path ? `<br><a href="${escapeHtml(sub.file_path)}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 hover:underline"><span>Lihat file jawaban</span><svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4m-4-8h6m0 0v6m0-6L10 14"></path></svg></a>` : ''}
+                </div>
+                <div class="sm:text-right">
+                    <span class="text-gray-500 text-xs">Nilai</span>
+                    <p class="font-bold text-gray-900">${sub.score === null || sub.score === undefined ? '-' : sub.score}</p>
+                </div>
+            </div>
+            ${sub.feedback_notes ? `<div class="rounded bg-gray-50 border border-gray-200 px-3 py-2 text-xs text-gray-700 whitespace-pre-line"><span class="font-semibold">Catatan guru</span><p class="mt-1">${escapeHtml(sub.feedback_notes)}</p></div>` : ''}
+            ${sub.revision_note ? `<div class="rounded bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800 whitespace-pre-line"><span class="font-semibold">Catatan revisi</span><p class="mt-1">${escapeHtml(sub.revision_note)}</p></div>` : ''}
+        </div>`;
+    }).join('');
+
+    return `<div class="border-t border-gray-100 pt-4 space-y-3">
+        <div class="space-y-3">${historyHtml}</div>
+        ${uploadBlock}
     </div>`;
 }
+
+function renderRevisionStatusBadge(status) {
+    const map = {
+        'submitted': '<span class="rounded bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-700">Menunggu Dinilai</span>',
+        'graded': '<span class="rounded bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">Sudah Dinilai</span>',
+        'revision_requested': '<span class="rounded bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">Diminta Revisi</span>',
+        'revision_submitted': '<span class="rounded bg-purple-100 px-2 py-0.5 text-xs font-semibold text-purple-700">Revisi Dikirim</span>',
+    };
+    return map[status] || `<span class="rounded bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-600">${escapeHtml(status || '-')}</span>`;
+}
+
+// function renderSubmissionGradeRow(submission, maxScore) {
+//     const score = submission.score === null || submission.score === undefined ? '' : submission.score;
+//     const hasScore = score !== '';
+//     const fieldState = hasScore ? 'disabled' : '';
+//     const saveState = hasScore || !isValidSubmissionScore(score, maxScore) ? 'disabled' : '';
+
+//     const isLatest = Boolean(submission.is_latest);
+//     const status = submission.revision_status || 'submitted';
+//     const revNum = Number(submission.revision_number || 1);
+//     const revBadge = revNum <= 1 ? 'Pengumpulan Awal' : `Revisi #${revNum - 1}`;
+//     const statusBadge = renderRevisionStatusBadge(status);
+
+//     // Tombol "Minta Revisi" hanya muncul saat: isLatest, sudah dinilai, dan belum minta revisi
+//     const canRequestRevision = isLatest && status === 'graded';
+//     const revisionRequestButton = canRequestRevision ? `<button type="button" class="btn-request-revision px-3 py-2 bg-rose-500 hover:bg-rose-600 text-white text-sm font-medium rounded-lg" data-submission-id="${submission.submission_id}">Minta Revisi</button>` : '';
+
+//     return `<div class="submission-grade-row rounded-lg border ${isLatest ? 'border-emerald-400 bg-white shadow-sm' : 'border-gray-200 bg-white'} p-4" data-submission-id="${submission.submission_id}" data-max-score="${maxScore}">
+//         <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+//             <div class="flex items-center gap-2">
+//                 <span class="rounded bg-indigo-100 px-2 py-0.5 text-xs font-bold text-indigo-700">${revBadge}</span>
+//                 ${isLatest ? '<span class="rounded bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">Terbaru</span>' : ''}
+//             </div>
+//             <div>${statusBadge}</div>
+//         </div>
+//         <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 items-start">
+//             <div class="space-y-1 text-sm">
+            
+//             </div>
+//             <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+//                 <input type="number" class="input-submission-score w-full px-3 py-2 text-sm border border-gray-300 rounded-lg disabled:bg-gray-100 disabled:text-gray-500" min="0" max="${maxScore}" step="0.01" value="${score}" placeholder="Nilai (0-${maxScore})" ${fieldState}>
+//                 <textarea rows="1" class="input-submission-feedback w-full px-3 py-2 text-sm border border-gray-300 rounded-lg disabled:bg-gray-100 disabled:text-gray-500" placeholder="Catatan (opsional)" ${fieldState}>${escapeHtml(submission.feedback_notes || '')}</textarea>
+//             </div>
+//         </div>
+//         <div class="mt-3 grid grid-cols-1 lg:grid-cols-2 gap-3 items-center border-t border-gray-200 pt-3">
+//             <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+//                 <span class="text-gray-600">Submit: ${formatSubmissionDate(submission.submitted_at)}</span>
+//                 <a href="${escapeHtml(submission.file_path || '#')}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 font-semibold text-indigo-600 hover:text-indigo-800 hover:underline">
+//                     <span>Buka file jawaban</span>
+//                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10v-4m-4-8h6m0 0v6m0-6L10 14"></path></svg>
+//                 </a>
+//             </div>
+//             <div class="flex flex-wrap justify-start lg:justify-end gap-2">
+//                 <button type="button" class="btn-cancel-grade hidden px-3 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-100">Batalkan Perubahan</button>
+//                 <button type="button" class="btn-edit-grade ${hasScore ? '' : 'hidden'} px-3 py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg">Edit Nilai</button>
+//                 <button type="button" class="btn-submit-grade ${hasScore ? 'hidden' : ''} px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-lg disabled:opacity-50 disabled:cursor-not-allowed" ${saveState}>Simpan Nilai</button>
+//                 ${revisionRequestButton}
+//             </div>
+//         </div>
+//         ${submission.revision_note ? `<div class="mt-3 rounded bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800 whitespace-pre-line"><span class="font-semibold">Catatan revisi</span><p class="mt-1">${escapeHtml(submission.revision_note)}</p></div>` : ''}
+//     </div>`;
+// }
 
 function renderSubmissionGradeRow(submission, maxScore) {
     const score = submission.score === null || submission.score === undefined ? '' : submission.score;
     const hasScore = score !== '';
+
+    const isLatest = Boolean(submission.is_latest);
+    const status = submission.revision_status || 'submitted';
+    const revNum = Number(submission.revision_number || 1);
+    const revBadge = revNum <= 1 ? 'Pengumpulan Awal' : `Revisi #${revNum - 1}`;
+    const statusBadge = renderRevisionStatusBadge(status);
+
+    // Rule editable:
+    //  - Submission terbaru (is_latest)
+    //  - Bukan status 'revision_requested' (sudah minta revisi → read-only)
+    const isEditable = isLatest && status !== 'revision_requested';
+
     const fieldState = hasScore ? 'disabled' : '';
     const saveState = hasScore || !isValidSubmissionScore(score, maxScore) ? 'disabled' : '';
-    return `<div class="submission-grade-row rounded-lg border border-gray-200 bg-gray-50 p-4" data-submission-id="${submission.submission_id}" data-max-score="${maxScore}">
+
+    // Tombol aksi — hanya muncul jika editable
+    let actionButtons = '';
+    if (isEditable) {
+        const canRequestRevision = hasScore && status === 'graded';
+        actionButtons = `
+            <button type="button" class="btn-cancel-grade hidden px-3 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-100">Batalkan Perubahan</button>
+            <button type="button" class="btn-edit-grade ${hasScore ? '' : 'hidden'} px-3 py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg">Edit Nilai</button>
+            <button type="button" class="btn-submit-grade ${hasScore ? 'hidden' : ''} px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-lg disabled:opacity-50 disabled:cursor-not-allowed" ${saveState}>Simpan Nilai</button>
+            ${canRequestRevision ? `<button type="button" class="btn-request-revision px-3 py-2 bg-rose-500 hover:bg-rose-600 text-white text-sm font-medium rounded-lg" data-submission-id="${submission.submission_id}">Minta Revisi</button>` : ''}
+        `;
+    }
+
+    // Blok nilai & catatan: form input (editable) atau text (read-only)
+    const scoreBlock = isEditable
+        ? `<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+               <input type="number" class="input-submission-score w-full px-3 py-2 text-sm border border-gray-300 rounded-lg disabled:bg-gray-100 disabled:text-gray-500" min="0" max="${maxScore}" step="0.01" value="${score}" placeholder="Nilai (0-${maxScore})" ${fieldState}>
+               <textarea rows="1" class="input-submission-feedback w-full px-3 py-2 text-sm border border-gray-300 rounded-lg disabled:bg-gray-100 disabled:text-gray-500" placeholder="Catatan (opsional)" ${fieldState}>${escapeHtml(submission.feedback_notes || '')}</textarea>
+           </div>`
+        : `<div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+               <div>
+                   <p class="text-xs text-gray-500 mb-0.5">Nilai</p>
+                   <p class="font-bold text-gray-900">${hasScore ? score : '-'}</p>
+               </div>
+               <div>
+                   <p class="text-xs text-gray-500 mb-0.5">Catatan Guru</p>
+                   <p class="text-gray-700 whitespace-pre-line">${submission.feedback_notes ? escapeHtml(submission.feedback_notes) : '<span class="italic text-gray-400">-</span>'}</p>
+               </div>
+           </div>`;
+
+    // Card border: editable → emerald/abu, read-only → abu terang
+    const cardBorder = isEditable
+        ? (isLatest ? 'border-emerald-400 bg-white shadow-sm' : 'border-gray-300 bg-white')
+        : 'border-gray-200 bg-gray-50/60';
+
+    return `<div class="submission-grade-row rounded-lg border ${cardBorder} p-4" data-submission-id="${submission.submission_id}" data-max-score="${maxScore}" data-editable="${isEditable ? '1' : '0'}">
+        <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+            <div class="flex items-center gap-2">
+                <span class="rounded bg-indigo-100 px-2 py-0.5 text-xs font-bold text-indigo-700">${revBadge}</span>
+                ${isLatest ? '<span class="rounded bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">Terbaru</span>' : ''}
+                
+            </div>
+            <div>${statusBadge}</div>
+        </div>
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 items-start">
             <div class="space-y-1 text-sm">
-            <p class="font-semibold text-gray-900">${escapeHtml(submission.student_name)}</p>
-            <p class="text-gray-600">NISN: ${escapeHtml(submission.nisn)}</p>
-            </div>
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <input type="number" class="input-submission-score w-full px-3 py-2 text-sm border border-gray-300 rounded-lg disabled:bg-gray-100 disabled:text-gray-500" min="0" max="${maxScore}" step="0.01" value="${score}" placeholder="Nilai (0-${maxScore})" ${fieldState}>
-                <textarea rows="1" class="input-submission-feedback w-full px-3 py-2 text-sm border border-gray-300 rounded-lg disabled:bg-gray-100 disabled:text-gray-500" placeholder="Catatan (opsional)" ${fieldState}>${escapeHtml(submission.feedback_notes || '')}</textarea>
-            </div>
-        </div>
-        <div class="mt-3 grid grid-cols-1 lg:grid-cols-2 gap-3 items-center border-t border-gray-200 pt-3">
-            <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-                <span class="text-gray-600">Submit: ${formatSubmissionDate(submission.submitted_at)}</span>
+                
+                <p class="text-gray-800">${formatSubmissionDate(submission.submitted_at)}</p>
                 <a href="${escapeHtml(submission.file_path || '#')}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 font-semibold text-indigo-600 hover:text-indigo-800 hover:underline">
                     <span>Buka file jawaban</span>
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10v-4m-4-8h6m0 0v6m0-6L10 14"></path></svg>
                 </a>
             </div>
-            <div class="flex flex-wrap justify-start lg:justify-end gap-2">
-                <button type="button" class="btn-cancel-grade hidden px-3 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-100">Batalkan Perubahan</button>
-                <button type="button" class="btn-edit-grade ${hasScore ? '' : 'hidden'} px-3 py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg">Edit Nilai</button>
-                <button type="button" class="btn-submit-grade ${hasScore ? 'hidden' : ''} px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-lg disabled:opacity-50 disabled:cursor-not-allowed" ${saveState}>Simpan Nilai</button>
+            <div>${scoreBlock}</div>
+        </div>
+        ${actionButtons ? `<div class="mt-3 flex flex-wrap justify-end gap-2 border-t border-gray-200 pt-3">
+            ${actionButtons}
+        </div>` : ''}
+        ${submission.revision_note ? `<div class="mt-3 rounded bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800 whitespace-pre-line"><span class="font-semibold">Catatan revisi</span><p class="mt-1">${escapeHtml(submission.revision_note)}</p></div>` : ''}
+    </div>`;
+}
+
+function renderStudentSubmissionGroup(group, maxScore) {
+    const subs = group.submissions || [];
+    const totalSubs = subs.length;
+    const revCount = totalSubs > 1 ? totalSubs - 1 : 0;
+
+    // Sort: terbaru dulu (revision_number DESC)
+    const sortedSubs = [...subs].sort((a, b) => (b.revision_number || 1) - (a.revision_number || 1));
+
+    return `<div class="rounded-xl border-2 border-indigo-200 bg-indigo-50/30 overflow-hidden">
+        <div class="bg-indigo-100/60 px-4 py-3 border-b border-indigo-200">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="flex items-center gap-3">
+                    <span class="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-600 text-white text-sm font-bold">${escapeHtml((group.student_name || '?').charAt(0).toUpperCase())}</span>
+                    <div>
+                        <p class="text-sm font-bold text-gray-900">${escapeHtml(group.student_name)}</p>
+                        <p class="text-xs text-gray-600">NISN: ${escapeHtml(group.nisn || '-')}</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span class="rounded-full bg-white border border-indigo-300 px-3 py-1 text-xs font-bold text-indigo-700">
+                        ${totalSubs} Submission${totalSubs > 1 ? 's' : ''}${revCount > 0 ? ` · ${revCount} Revisi` : ''}
+                    </span>
+                </div>
             </div>
+        </div>
+        <div class="p-3 space-y-3">
+            ${sortedSubs.map(sub => renderSubmissionGradeRow(sub, maxScore)).join('')}
         </div>
     </div>`;
 }
